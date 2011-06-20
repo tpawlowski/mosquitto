@@ -28,9 +28,9 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <config.h>
-#include <mqtt3.h>
 
-void (*client_connack_callback)(int) = NULL;
+#include <mqtt3.h>
+#include <send_mosq.h>
 
 int mqtt3_handle_connack(mqtt3_context *context)
 {
@@ -47,15 +47,12 @@ int mqtt3_handle_connack(mqtt3_context *context)
 	mqtt3_log_printf(MOSQ_LOG_DEBUG, "Received CONNACK");
 	if(_mosquitto_read_byte(&context->core.in_packet, &byte)) return 1; // Reserved byte, not used
 	if(_mosquitto_read_byte(&context->core.in_packet, &rc)) return 1;
-	if(client_connack_callback){
-		client_connack_callback(rc);
-	}
 	switch(rc){
 		case 0:
 			if(context->bridge){
 				for(i=0; i<context->bridge->topic_count; i++){
 					if(context->bridge->topics[i].direction == bd_in || context->bridge->topics[i].direction == bd_both){
-						if(mqtt3_raw_subscribe(context, false, context->bridge->topics[i].topic, 2)){
+						if(_mosquitto_send_subscribe(&context->core, NULL, false, context->bridge->topics[i].topic, 2)){
 							return 1;
 						}
 					}

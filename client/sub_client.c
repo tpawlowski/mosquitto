@@ -27,7 +27,6 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,6 +45,7 @@ static int topic_qos = 0;
 static char *username = NULL;
 static char *password = NULL;
 int verbose = 0;
+bool quiet = false;
 
 void my_message_callback(void *obj, const struct mosquitto_message *message)
 {
@@ -76,22 +76,22 @@ void my_connect_callback(void *obj, int result)
 	}else{
 		switch(result){
 			case 1:
-				fprintf(stderr, "Connection Refused: unacceptable protocol version\n");
+				if(!quiet) fprintf(stderr, "Connection Refused: unacceptable protocol version\n");
 				break;
 			case 2:
-				fprintf(stderr, "Connection Refused: identifier rejected\n");
+				if(!quiet) fprintf(stderr, "Connection Refused: identifier rejected\n");
 				break;
 			case 3:
-				fprintf(stderr, "Connection Refused: broker unavailable\n");
+				if(!quiet) fprintf(stderr, "Connection Refused: broker unavailable\n");
 				break;
 			case 4:
-				fprintf(stderr, "Connection Refused: bad user name or password\n");
+				if(!quiet) fprintf(stderr, "Connection Refused: bad user name or password\n");
 				break;
 			case 5:
-				fprintf(stderr, "Connection Refused: not authorised\n");
+				if(!quiet) fprintf(stderr, "Connection Refused: not authorised\n");
 				break;
 			default:
-				fprintf(stderr, "Connection Refused: unknown reason\n");
+				if(!quiet) fprintf(stderr, "Connection Refused: unknown reason\n");
 				break;
 		}
 	}
@@ -101,17 +101,18 @@ void my_subscribe_callback(void *obj, uint16_t mid, int qos_count, const uint8_t
 {
 	int i;
 
-	printf("Subscribed (mid: %d): %d", mid, granted_qos[0]);
+	if(!quiet) printf("Subscribed (mid: %d): %d", mid, granted_qos[0]);
 	for(i=1; i<qos_count; i++){
-		printf(", %d", granted_qos[i]);
+		if(!quiet) printf(", %d", granted_qos[i]);
 	}
-	printf("\n");
+	if(!quiet) printf("\n");
 }
 
 void print_usage(void)
 {
 	printf("mosquitto_sub is a simple mqtt client that will subscribe to a single topic and print all messages it receives.\n\n");
 	printf("Usage: mosquitto_sub [-c] [-i id] [-k keepalive] [-p port] [-q qos] [-v] -t topic ...\n");
+	printf("                     [-d] [--quiet]\n");
 	printf("                     [-u username [--pw password]]\n");
 	printf("                     [--will-topic [--will-payload payload] [--will-qos qos] [--will-retain]]\n\n");
 	printf(" -c : disable 'clean session' (store subscription and pending messages when client disconnects).\n");
@@ -125,6 +126,7 @@ void print_usage(void)
 	printf(" -u : provide a username (requires MQTT 3.1 broker)\n");
 	printf(" -v : print published messages verbosely.\n");
 	printf(" --pw : provide a password (requires MQTT 3.1 broker)\n");
+	printf(" --quiet : don't print error messages.\n");
 	printf(" --will-payload : payload for the client Will, which is sent by the broker in case of\n");
 	printf("                  unexpected disconnection. If not given and will-topic is set, a zero\n");
 	printf("                  length message will be sent.\n");
@@ -136,7 +138,7 @@ void print_usage(void)
 
 int main(int argc, char *argv[])
 {
-	char id[30];
+	char *id = NULL;
 	int i;
 	char *host = "localhost";
 	int port = 1883;
@@ -144,14 +146,13 @@ int main(int argc, char *argv[])
 	bool clean_session = true;
 	bool debug = false;
 	struct mosquitto *mosq = NULL;
+	int rc;
 	
 	uint8_t *will_payload = NULL;
 	long will_payloadlen = 0;
 	int will_qos = 0;
 	bool will_retain = false;
 	char *will_topic = NULL;
-
-	snprintf(id, 30, "mosquitto_sub_%d", getpid());
 
 	for(i=1; i<argc; i++){
 		if(!strcmp(argv[i], "-p") || !strcmp(argv[i], "--port")){
@@ -187,8 +188,7 @@ int main(int argc, char *argv[])
 				print_usage();
 				return 1;
 			}else{
-				memset(id, 0, 30);
-				snprintf(id, 29, "%s", argv[i+1]);
+				id = argv[i+1];
 			}
 			i++;
 		}else if(!strcmp(argv[i], "-k") || !strcmp(argv[i], "--keepalive")){
@@ -219,6 +219,8 @@ int main(int argc, char *argv[])
 				}
 			}
 			i++;
+		}else if(!strcmp(argv[i], "--quiet")){
+			quiet = true;
 		}else if(!strcmp(argv[i], "-t") || !strcmp(argv[i], "--topic")){
 			if(i==argc-1){
 				fprintf(stderr, "Error: -t argument given but no topic specified.\n\n");
@@ -290,6 +292,15 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 	}
+	if(!id){
+		id = malloc(30);
+		if(!id){
+			if(!quiet) fprintf(stderr, "Error: Out of memory.\n");
+			return 1;
+		}
+		snprintf(id, 30, "mosquitto_sub_%d", getpid());
+	}
+
 	if(topic_count == 0){
 		fprintf(stderr, "Error: You must specify a topic to subscribe to.\n");
 		print_usage();
@@ -306,12 +317,12 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 	if(password && !username){
-		fprintf(stderr, "Warning: Not using password since username not set.\n");
+		if(!quiet) fprintf(stderr, "Warning: Not using password since username not set.\n");
 	}
 	mosquitto_lib_init();
 	mosq = mosquitto_new(id, NULL);
 	if(!mosq){
-		fprintf(stderr, "Error: Out of memory.\n");
+		if(!quiet) fprintf(stderr, "Error: Out of memory.\n");
 		return 1;
 	}
 	if(debug){
@@ -319,11 +330,11 @@ int main(int argc, char *argv[])
 				| MOSQ_LOG_NOTICE | MOSQ_LOG_INFO, MOSQ_LOG_STDERR);
 	}
 	if(will_topic && mosquitto_will_set(mosq, true, will_topic, will_payloadlen, will_payload, will_qos, will_retain)){
-		fprintf(stderr, "Error: Problem setting will.\n");
+		if(!quiet) fprintf(stderr, "Error: Problem setting will.\n");
 		return 1;
 	}
 	if(username && mosquitto_username_pw_set(mosq, username, password)){
-		fprintf(stderr, "Error: Problem setting username and password.\n");
+		if(!quiet) fprintf(stderr, "Error: Problem setting username and password.\n");
 		return 1;
 	}
 	mosquitto_connect_callback_set(mosq, my_connect_callback);
@@ -332,16 +343,19 @@ int main(int argc, char *argv[])
 		mosquitto_subscribe_callback_set(mosq, my_subscribe_callback);
 	}
 
-	if(mosquitto_connect(mosq, host, port, keepalive, clean_session)){
-		fprintf(stderr, "Unable to connect.\n");
-		return 1;
+	rc = mosquitto_connect(mosq, host, port, keepalive, clean_session);
+	if(rc){
+		if(!quiet) fprintf(stderr, "Unable to connect (%d).\n", rc);
+		return rc;
 	}
 
-	while(!mosquitto_loop(mosq, -1)){
-	}
+	do{
+		rc = mosquitto_loop(mosq, -1);
+	}while(rc == MOSQ_ERR_SUCCESS);
+
 	mosquitto_destroy(mosq);
 	mosquitto_lib_cleanup();
 
-	return 0;
+	return rc;
 }
 

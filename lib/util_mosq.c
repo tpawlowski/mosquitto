@@ -58,7 +58,7 @@ int _mosquitto_packet_alloc(struct _mosquitto_packet *packet)
 		remaining_bytes[packet->remaining_count] = byte;
 		packet->remaining_count++;
 	}while(remaining_length > 0 && packet->remaining_count < 5);
-	if(packet->remaining_count == 4) return MOSQ_ERR_PAYLOAD_SIZE;
+	if(packet->remaining_count == 5) return MOSQ_ERR_PAYLOAD_SIZE;
 	packet->packet_length = packet->remaining_length + 1 + packet->remaining_count;
 	packet->payload = _mosquitto_malloc(sizeof(uint8_t)*packet->packet_length);
 	if(!packet->payload) return MOSQ_ERR_NOMEM;
@@ -126,4 +126,16 @@ uint16_t _mosquitto_mid_generate(struct _mosquitto_core *core)
 	if(core->last_mid == 0) core->last_mid++;
 	
 	return core->last_mid;
+}
+
+/* Search for + or # in a string. Return true if found. */
+bool _mosquitto_wildcard_check(const char *str)
+{
+	while(str && str[0]){
+		if(str[0] == '+' || str[0] == '#'){
+			return true;
+		}
+		str = &str[1];
+	}
+	return false;
 }

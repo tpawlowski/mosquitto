@@ -14,10 +14,12 @@ set (MOSQ_SRCS
 	net.c
 	../lib/net_mosq.c ../lib/net_mosq.h
 	persist.c
-	raw_send.c raw_send_client.c raw_send_server.c
+	raw_send.c raw_send_server.c
 	read_handle.c read_handle_client.c read_handle_server.c
 	subs.c
-	security.c
+	security.c security_external.c
+	../lib/send_base_mosq.c
+	../lib/send_client_mosq.c ../lib/send_mosq.h
 	util.c
 	../lib/util_mosq.c ../lib/util_mosq.h)
 
@@ -53,6 +55,18 @@ option(INC_CONTROL
 if (${INC_CONTROL} STREQUAL ON)
 	add_definitions("-DWITH_CONTROL")
 endif (${INC_CONTROL} STREQUAL ON)
+option(WITH_PERSISTENCE
+	"Include persistence support?" ON)
+if (${WITH_PERSISTENCE} STREQUAL ON)
+	add_definitions("-DWITH_PERSISTENCE")
+endif (${WITH_PERSISTENCE} STREQUAL ON)
+
+
+option(WITH_EXTERNAL_SECURITY_CHECKS
+	"Use external security checks (needs additional code)?" OFF)
+if (${WITH_EXTERNAL_SECURITY_CHECKS} STREQUAL ON)
+	add_definitions("-DWITH_EXTERNAL_SECURITY_CHECKS")
+endif (${WITH_EXTERNAL_SECURITY_CHECKS} STREQUAL ON)
 
 add_definitions (-DWITH_BROKER)
 

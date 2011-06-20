@@ -5,6 +5,10 @@
  * easily in restrictive environments by removing features.
  * ============================================================ */
 
+#ifndef CMAKE
+/* Only use the compile time options defined here from the standard Makefile. */
+
+
 /* Uncomment to compile with tcpd/libwrap support. */
 //#define WITH_WRAP
 
@@ -16,16 +20,6 @@
  * heap memory usage nor export '$SYS/broker/heap/current size', but will use
  * slightly less memory and CPU time. */
 #define WITH_MEMORY_TRACKING
-
-/* Compile with the ability to upgrade from old style sqlite persistent
- * databases to the new mosquitto format. This means a dependency on sqlite. It
- * isn't needed for new installations.
- * Not available on Windows.
- * This will be removed in version 0.11.
- */
-#ifndef WIN32
-//#define WITH_SQLITE_UPGRADE
-#endif
 
 /* Compile with persistent database support. This allows the broker to store
  * retained messages and durable subscriptions to a file periodically and on
@@ -43,6 +37,18 @@
  * CPU time.
  */
 #define WITH_BRIDGE
+
+/* Use the username/password and ACL checks defined in security_external.c
+ * This is empty by default, but gives a more straightforward way of adding
+ * support for existing username/password databases to mosquitto.
+ * Uncommenting without adding your own code to security_external.c will
+ * result in all access being denied.
+ * It also enables the db_* config options in mosquitto.conf.
+ * Get in touch with the authors if you need help adding support for your
+ * system.
+ */
+//#define WITH_EXTERNAL_SECURITY_CHECKS
+#endif
 
 /* Compile with remote control support included. Remote control must be enabled
  * in the config file to be used.

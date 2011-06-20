@@ -29,7 +29,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef _NET_MOSQ_H_
 #define _NET_MOSQ_H_
 
-#include <stdint.h>
 #ifndef WIN32
 #include <unistd.h>
 #else
@@ -39,6 +38,12 @@ typedef int ssize_t;
 
 #include <mosquitto_internal.h>
 #include <mosquitto.h>
+
+#ifdef WIN32
+#  define COMPAT_CLOSE(a) closesocket(a)
+#else
+#  define COMPAT_CLOSE(a) close(a)
+#endif
 
 /* For when not using winsock libraries. */
 #ifndef INVALID_SOCKET

@@ -1,13 +1,12 @@
 # This is a cmake script.
-# It is only intended for building libmosquitto and the clients and can be
-# used to generate Visual Studio projects, allowing them to be compiled
-# natively on Windows.
+# It is intended to be the default means of building mosquitto, but isn't
+# quite ready for all cases yet.
 
 project(mosquitto)
 
 cmake_minimum_required(VERSION 2.6)
 
-set (VERSION 0.9.99)
+set (VERSION 0.11.90)
 
 if (WIN32)
 	execute_process(COMMAND echo "%DATE% %TIME%" OUTPUT_VARIABLE TIMESTAMP
@@ -17,7 +16,7 @@ else (WIN32)
 			OUTPUT_STRIP_TRAILING_WHITESPACE)
 endif (WIN32)
 
-add_definitions (-DVERSION=\"${VERSION}\" -DTIMESTAMP=\"${TIMESTAMP}\")
+add_definitions (-DCMAKE -DVERSION=\"${VERSION}\" -DTIMESTAMP=\"${TIMESTAMP}\")
 
 if (WIN32)
 	set (BINDIR .)
@@ -28,6 +27,7 @@ if (WIN32)
 	set (DATAROOTDIR share)
 	set (MANDIR man)
     set (SHAREDEST .)
+    add_definitions("-D_CRT_SECURE_NO_WARNINGS")
 else (WIN32)
 	set (BINDIR bin)
 	set (SBINDIR sbin)

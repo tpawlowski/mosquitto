@@ -31,7 +31,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <stdint.h>
 #include <string.h>
 #ifndef WIN32
 #include <netdb.h>
@@ -44,12 +43,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <memory_mosq.h>
 #include <net_mosq.h>
-
-#ifdef WIN32
-#  define COMPAT_CLOSE(a) closesocket(a)
-#else
-#  define COMPAT_CLOSE(a) close(a)
-#endif
 
 void _mosquitto_net_init(void)
 {
@@ -133,7 +126,7 @@ int _mosquitto_socket_close(struct _mosquitto_core *core)
  */
 int _mosquitto_socket_connect(struct _mosquitto_core *core, const char *host, uint16_t port)
 {
-	int sock;
+	int sock = INVALID_SOCKET;
 	int opt;
 	struct addrinfo hints;
 	struct addrinfo *ainfo, *rp;
@@ -164,19 +157,16 @@ int _mosquitto_socket_connect(struct _mosquitto_core *core, const char *host, ui
 		}else if(rp->ai_family == PF_INET6){
 			((struct sockaddr_in6 *)rp->ai_addr)->sin6_port = htons(port);
 		}else{
-			freeaddrinfo(ainfo);
-			COMPAT_CLOSE(sock);
-			return MOSQ_ERR_UNKNOWN;
+			continue;
 		}
 		if(connect(sock, rp->ai_addr, rp->ai_addrlen) != -1){
 			break;
 		}
 
 		COMPAT_CLOSE(sock);
-		return MOSQ_ERR_UNKNOWN;
 	}
 	if(!rp){
-		fprintf(stderr, "Error: %s", strerror(errno));
+		fprintf(stderr, "Error: %s\n", strerror(errno));
 		COMPAT_CLOSE(sock);
 		return MOSQ_ERR_UNKNOWN;
 	}

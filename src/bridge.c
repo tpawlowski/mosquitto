@@ -28,15 +28,16 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <assert.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include <config.h>
+
 #include <net_mosq.h>
 #include <mqtt3.h>
 #include <memory_mosq.h>
 #include <mosquitto.h>
+#include <send_mosq.h>
 
 #ifdef WITH_BRIDGE
 
@@ -101,13 +102,12 @@ int mqtt3_bridge_new(mosquitto_db *db, struct _mqtt3_bridge *bridge)
 
 int mqtt3_bridge_connect(mosquitto_db *db, mqtt3_context *context)
 {
-	int new_sock = -1;
+	int rc;
 	int i;
 
 	if(!context || !context->bridge) return MOSQ_ERR_INVAL;
 
 	context->core.state = mosq_cs_new;
-	context->duplicate = false;
 	context->core.sock = -1;
 	context->core.last_msg_in = time(NULL);
 	context->core.last_msg_out = time(NULL);
@@ -117,19 +117,14 @@ int mqtt3_bridge_connect(mosquitto_db *db, mqtt3_context *context)
 	mqtt3_bridge_packet_cleanup(context);
 
 	mqtt3_log_printf(MOSQ_LOG_NOTICE, "Connecting bridge %s", context->bridge->name);
-	new_sock = _mosquitto_socket_connect(&context->core, context->bridge->address, context->bridge->port);
-	if(new_sock == -1){
+	rc = _mosquitto_socket_connect(&context->core, context->bridge->address, context->bridge->port);
+	if(rc != MOSQ_ERR_SUCCESS){
 		mqtt3_log_printf(MOSQ_LOG_ERR, "Error creating bridge.");
-		return 1;
+		return rc;
 	}
 
-	context->core.sock = new_sock;
-
 	context->core.last_msg_in = time(NULL);
-	if(mqtt3_raw_connect(context, context->core.id,
-			/*will*/ false, /*will qos*/ 0, /*will retain*/ false, /*will topic*/ NULL, /*will msg*/ NULL,
-			context->core.keepalive, context->core.clean_session)){
-
+	if(_mosquitto_send_connect(&context->core, context->core.keepalive, context->core.clean_session)){
 		return 1;
 	}
 
