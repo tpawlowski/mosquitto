@@ -131,20 +131,24 @@ int _mosquitto_handle_publish(struct mosquitto *mosq)
 	message->timestamp = time(NULL);
 	switch(message->msg.qos){
 		case 0:
+			pthread_mutex_lock(&mosq->callback_mutex);
 			if(mosq->on_message){
 				mosq->in_callback = true;
 				mosq->on_message(mosq, mosq->obj, &message->msg);
 				mosq->in_callback = false;
 			}
+			pthread_mutex_unlock(&mosq->callback_mutex);
 			_mosquitto_message_cleanup(&message);
 			return MOSQ_ERR_SUCCESS;
 		case 1:
 			rc = _mosquitto_send_puback(mosq, message->msg.mid);
+			pthread_mutex_lock(&mosq->callback_mutex);
 			if(mosq->on_message){
 				mosq->in_callback = true;
 				mosq->on_message(mosq, mosq->obj, &message->msg);
 				mosq->in_callback = false;
 			}
+			pthread_mutex_unlock(&mosq->callback_mutex);
 			_mosquitto_message_cleanup(&message);
 			return rc;
 		case 2:

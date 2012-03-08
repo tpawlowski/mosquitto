@@ -121,6 +121,7 @@ int _mosquitto_packet_queue(struct mosquitto *mosq, struct _mosquitto_packet *pa
 	packet->to_process = packet->packet_length;
 
 	packet->next = NULL;
+	pthread_mutex_lock(&mosq->out_packet_mutex);
 	if(mosq->out_packet){
 		tail = mosq->out_packet;
 		while(tail->next){
@@ -130,6 +131,7 @@ int _mosquitto_packet_queue(struct mosquitto *mosq, struct _mosquitto_packet *pa
 	}else{
 		mosq->out_packet = packet;
 	}
+	pthread_mutex_unlock(&mosq->out_packet_mutex);
 #ifdef WITH_BROKER
 	return _mosquitto_packet_write(mosq);
 #else
@@ -437,8 +439,16 @@ int _mosquitto_packet_write(struct mosquitto *mosq)
 	if(!mosq) return MOSQ_ERR_INVAL;
 	if(mosq->sock == INVALID_SOCKET) return MOSQ_ERR_NO_CONN;
 
-	while(mosq->out_packet){
-		packet = mosq->out_packet;
+	pthread_mutex_lock(&mosq->current_out_packet_mutex);
+	pthread_mutex_lock(&mosq->out_packet_mutex);
+	if(mosq->out_packet && !mosq->current_out_packet){
+		mosq->current_out_packet = mosq->out_packet;
+		mosq->out_packet = mosq->out_packet->next;
+	}
+	pthread_mutex_unlock(&mosq->out_packet_mutex);
+
+	while(mosq->current_out_packet){
+		packet = mosq->current_out_packet;
 
 		while(packet->to_process > 0){
 			write_length = _mosquitto_net_write(mosq, &(packet->payload[packet->pos]), packet->to_process);
@@ -453,8 +463,10 @@ int _mosquitto_packet_write(struct mosquitto *mosq)
 				errno = WSAGetLastError();
 #endif
 				if(errno == EAGAIN || errno == COMPAT_EWOULDBLOCK){
+					pthread_mutex_unlock(&mosq->current_out_packet_mutex);
 					return MOSQ_ERR_SUCCESS;
 				}else{
+					pthread_mutex_unlock(&mosq->current_out_packet_mutex);
 					switch(errno){
 						case COMPAT_ECONNRESET:
 							return MOSQ_ERR_CONN_LOST;
@@ -468,21 +480,32 @@ int _mosquitto_packet_write(struct mosquitto *mosq)
 #ifdef WITH_BROKER
 		msgs_sent++;
 #else
+		pthread_mutex_lock(&mosq->callback_mutex);
 		if(((packet->command)&0xF6) == PUBLISH && mosq->on_publish){
 			/* This is a QoS=0 message */
 			mosq->in_callback = true;
 			mosq->on_publish(mosq, mosq->obj, packet->mid);
 			mosq->in_callback = false;
 		}
+		pthread_mutex_unlock(&mosq->callback_mutex);
 #endif
 
 		/* Free data and reset values */
-		mosq->out_packet = packet->next;
+		pthread_mutex_lock(&mosq->out_packet_mutex);
+		mosq->current_out_packet = mosq->out_packet;
+		if(mosq->out_packet){
+			mosq->out_packet = mosq->out_packet->next;
+		}
+		pthread_mutex_unlock(&mosq->out_packet_mutex);
+
 		_mosquitto_packet_cleanup(packet);
 		_mosquitto_free(packet);
 
+		pthread_mutex_lock(&mosq->msgtime_mutex);
 		mosq->last_msg_out = time(NULL);
+		pthread_mutex_unlock(&mosq->msgtime_mutex);
 	}
+	pthread_mutex_unlock(&mosq->current_out_packet_mutex);
 	return MOSQ_ERR_SUCCESS;
 }
 

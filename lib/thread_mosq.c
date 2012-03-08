@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2009,2010, Roger Light <roger@atchoo.org>
+Copyright (c) 2011 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -27,50 +27,66 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <assert.h>
+#include <config.h>
 
-#include <mosquitto.h>
-#include <logging_mosq.h>
-#include <memory_mosq.h>
-#include <net_mosq.h>
-#include <read_handle.h>
+#include <unistd.h>
 
-int _mosquitto_handle_connack(struct mosquitto *mosq)
+#include <mosquitto_internal.h>
+
+void *_mosquitto_thread_main(void *obj);
+
+int mosquitto_loop_start(struct mosquitto *mosq)
 {
-	uint8_t byte;
-	uint8_t result;
+#ifdef WITH_THREADING
+	if(!mosq) return MOSQ_ERR_INVAL;
+
+	pthread_create(&mosq->thread_id, NULL, _mosquitto_thread_main, mosq);
+	return MOSQ_ERR_SUCCESS;
+#else
+	return MOSQ_ERR_NOT_SUPPORTED;
+#endif
+}
+
+int mosquitto_loop_stop(struct mosquitto *mosq, bool force)
+{
+#ifdef WITH_THREADING
+	if(!mosq) return MOSQ_ERR_INVAL;
+	
+	if(force){
+		pthread_cancel(mosq->thread_id);
+	}
+	pthread_join(mosq->thread_id, NULL);
+
+	return MOSQ_ERR_SUCCESS;
+#else
+	return MOSQ_ERR_NOT_SUPPORTED;
+#endif
+}
+
+#ifdef WITH_THREADING
+void *_mosquitto_thread_main(void *obj)
+{
+	struct mosquitto *mosq = obj;
+	int run = 1;
 	int rc;
 
-	assert(mosq);
-#ifdef WITH_STRICT_PROTOCOL
-	if(mosq->in_packet.remaining_length != 2){
-		return MOSQ_ERR_PROTOCOL;
+	if(!mosq) return NULL;
+
+	while(run){
+		do{
+			rc = mosquitto_loop(mosq, -1);
+		}while(rc == MOSQ_ERR_SUCCESS);
+		pthread_mutex_lock(&mosq->state_mutex);
+		if(mosq->state == mosq_cs_disconnecting){
+			run = 0;
+			pthread_mutex_unlock(&mosq->state_mutex);
+		}else{
+			pthread_mutex_unlock(&mosq->state_mutex);
+			sleep(1);
+			mosquitto_reconnect(mosq);
+		}
 	}
-#endif
-	_mosquitto_log_printf(mosq, MOSQ_LOG_DEBUG, "Received CONNACK");
-	rc = _mosquitto_read_byte(&mosq->in_packet, &byte); // Reserved byte, not used
-	if(rc) return rc;
-	rc = _mosquitto_read_byte(&mosq->in_packet, &result);
-	if(rc) return rc;
-	pthread_mutex_lock(&mosq->callback_mutex);
-	if(mosq->on_connect){
-		mosq->in_callback = true;
-		mosq->on_connect(mosq, mosq->obj, result);
-		mosq->in_callback = false;
-	}
-	pthread_mutex_unlock(&mosq->callback_mutex);
-	switch(result){
-		case 0:
-			mosq->state = mosq_cs_connected;
-			return MOSQ_ERR_SUCCESS;
-		case 1:
-		case 2:
-		case 3:
-		case 4:
-		case 5:
-			return MOSQ_ERR_CONN_REFUSED;
-		default:
-			return MOSQ_ERR_PROTOCOL;
-	}
+	return obj;
 }
+#endif
 

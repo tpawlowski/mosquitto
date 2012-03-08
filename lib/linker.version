@@ -41,5 +41,7 @@ VERS_0.12 {
 
 VERS_0.16 {
 	global:
+		mosquitto_loop_start;
+		mosquitto_loop_stop;
 		mosquitto_want_write;
 } VERS_0.12;

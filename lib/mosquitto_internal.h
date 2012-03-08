@@ -38,7 +38,17 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <stdlib.h>
 #include <time.h>
 #ifdef WIN32
-#include <winsock2.h>
+#  include <winsock2.h>
+#endif
+
+#ifdef WITH_THREADING
+#  ifdef WIN32
+#    include <winpthreads.h>
+#  else
+#    include <pthread.h>
+#  endif
+#else
+#  include <dummypthread.h>
 #endif
 
 #include <mosquitto.h>
@@ -115,10 +125,19 @@ struct mosquitto {
 	time_t last_msg_out;
 	uint16_t last_mid;
 	struct _mosquitto_packet in_packet;
+	struct _mosquitto_packet *current_out_packet;
 	struct _mosquitto_packet *out_packet;
 	struct mosquitto_message *will;
 #ifdef WITH_SSL
 	struct _mosquitto_ssl *ssl;
+#endif
+#ifdef WITH_THREADING
+	pthread_mutex_t callback_mutex;
+	pthread_mutex_t msgtime_mutex;
+	pthread_mutex_t out_packet_mutex;
+	pthread_mutex_t current_out_packet_mutex;
+	pthread_mutex_t state_mutex;
+	pthread_t thread_id;
 #endif
 #ifdef WITH_BROKER
 	struct _mqtt3_bridge *bridge;

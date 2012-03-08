@@ -78,6 +78,8 @@ class mosqpp_EXPORT mosquittopp {
 		int loop_misc();
 		int loop_read();
 		int loop_write();
+		int loop_start();
+		int loop_stop();
 		bool want_write();
 		
 		virtual void on_connect(int rc) {return;};

@@ -336,6 +336,7 @@ int mqtt3_db_backup(mosquitto_db *db, bool cleanup, bool shutdown)
 	uint32_t i32temp;
 	uint16_t i16temp;
 	uint8_t i8temp;
+	char err[256];
 
 	if(!db || !db->config || !db->config->persistence_filepath) return MOSQ_ERR_INVAL;
 	_mosquitto_log_printf(NULL, MOSQ_LOG_INFO, "Saving in-memory database to %s.", db->config->persistence_filepath);
@@ -378,7 +379,8 @@ int mqtt3_db_backup(mosquitto_db *db, bool cleanup, bool shutdown)
 	fclose(db_fptr);
 	return rc;
 error:
-	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+	strerror_r(errno, err, 256);
+	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 	if(db_fptr) fclose(db_fptr);
 	return 1;
 }
@@ -482,6 +484,7 @@ static int _db_client_msg_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 	uint8_t qos, retain, direction, state, dup;
 	char *client_id = NULL;
 	int rc;
+	char err[256];
 
 	read_e(db_fptr, &i16temp, sizeof(uint16_t));
 	slen = ntohs(i16temp);
@@ -515,7 +518,8 @@ static int _db_client_msg_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 
 	return rc;
 error:
-	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+	strerror_r(errno, err, 256);
+	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 	if(db_fptr) fclose(db_fptr);
 	if(client_id) _mosquitto_free(client_id);
 	return 1;
@@ -531,6 +535,7 @@ static int _db_msg_store_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 	char *topic = NULL;
 	int rc = 0;
 	struct mosquitto_msg_store *stored = NULL;
+	char err[256];
 
 	read_e(db_fptr, &i64temp, sizeof(dbid_t));
 	store_id = i64temp;
@@ -545,7 +550,8 @@ static int _db_msg_store_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 			return MOSQ_ERR_NOMEM;
 		}
 		if(fread(source_id, 1, slen, db_fptr) != slen){
-			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+			strerror_r(errno, err, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 			fclose(db_fptr);
 			_mosquitto_free(source_id);
 			return 1;
@@ -568,7 +574,8 @@ static int _db_msg_store_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 			return MOSQ_ERR_NOMEM;
 		}
 		if(fread(topic, 1, slen, db_fptr) != slen){
-			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+			strerror_r(errno, err, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 			fclose(db_fptr);
 			_mosquitto_free(source_id);
 			_mosquitto_free(topic);
@@ -596,7 +603,8 @@ static int _db_msg_store_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 			return MOSQ_ERR_NOMEM;
 		}
 		if(fread(payload, 1, payloadlen, db_fptr) != payloadlen){
-			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+			strerror_r(errno, err, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 			fclose(db_fptr);
 			_mosquitto_free(source_id);
 			_mosquitto_free(topic);
@@ -612,7 +620,8 @@ static int _db_msg_store_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 
 	return rc;
 error:
-	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+	strerror_r(errno, err, 256);
+	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 	if(db_fptr) fclose(db_fptr);
 	if(source_id) _mosquitto_free(source_id);
 	if(topic) _mosquitto_free(topic);
@@ -623,9 +632,11 @@ static int _db_retain_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 {
 	dbid_t i64temp, store_id;
 	struct mosquitto_msg_store *store;
+	char err[256];
 
 	if(fread(&i64temp, sizeof(dbid_t), 1, db_fptr) != 1){
-		_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+		strerror_r(errno, err, 256);
+		_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 		fclose(db_fptr);
 		return 1;
 	}
@@ -648,6 +659,7 @@ static int _db_sub_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 	char *client_id;
 	char *topic;
 	int rc = 0;
+	char err[256];
 
 	read_e(db_fptr, &i16temp, sizeof(uint16_t));
 	slen = ntohs(i16temp);
@@ -677,7 +689,8 @@ static int _db_sub_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 
 	return rc;
 error:
-	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+	strerror_r(errno, err, 256);
+	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 	if(db_fptr) fclose(db_fptr);
 	return 1;
 }
@@ -693,6 +706,7 @@ int mqtt3_db_restore(mosquitto_db *db)
 	uint16_t i16temp, chunk;
 	uint8_t i8temp;
 	ssize_t rlen;
+	char err[256];
 
 	assert(db);
 	assert(db->config);
@@ -769,7 +783,8 @@ int mqtt3_db_restore(mosquitto_db *db)
 
 	return rc;
 error:
-	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+	strerror_r(errno, err, 256);
+	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 	if(fptr) fclose(fptr);
 	return 1;
 }
