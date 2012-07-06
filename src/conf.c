@@ -42,6 +42,7 @@ static int _conf_parse_string(char **token, const char *name, char **value, char
 
 static void _config_init_reload(mqtt3_config *config)
 {
+	int i;
 	/* Set defaults */
 	if(config->acl_file) _mosquitto_free(config->acl_file);
 	config->acl_file = NULL;
@@ -71,7 +72,6 @@ static void _config_init_reload(mqtt3_config *config)
 	config->retry_interval = 20;
 	config->store_clean_interval = 10;
 	config->sys_interval = 10;
-#ifdef WITH_EXTERNAL_SECURITY_CHECKS
 	if(config->db_host) _mosquitto_free(config->db_host);
 	config->db_host = NULL;
 	config->db_port = 0;
@@ -81,7 +81,16 @@ static void _config_init_reload(mqtt3_config *config)
 	config->db_username = NULL;
 	if(config->db_password) _mosquitto_free(config->db_password);
 	config->db_password = NULL;
-#endif
+	if(config->auth_options){
+		for(i=0; i<config->auth_option_count; i++){
+			_mosquitto_free(config->auth_options[i]->key);
+			_mosquitto_free(config->auth_options[i]->value);
+			_mosquitto_free(config->auth_options[i]);
+		}
+		_mosquitto_free(config->auth_options);
+		config->auth_options = NULL;
+		config->auth_option_count = 0;
+	}
 }
 
 void mqtt3_config_init(mqtt3_config *config)
@@ -112,6 +121,7 @@ void mqtt3_config_init(mqtt3_config *config)
 	config->bridges = NULL;
 	config->bridge_count = 0;
 #endif
+	config->auth_plugin = NULL;
 }
 
 void mqtt3_config_cleanup(mqtt3_config *config)
@@ -152,12 +162,19 @@ void mqtt3_config_cleanup(mqtt3_config *config)
 		_mosquitto_free(config->bridges);
 	}
 #endif
-#ifdef WITH_EXTERNAL_SECURITY_CHECKS
 	if(config->db_host) _mosquitto_free(config->db_host);
 	if(config->db_name) _mosquitto_free(config->db_name);
 	if(config->db_username) _mosquitto_free(config->db_username);
 	if(config->db_password) _mosquitto_free(config->db_password);
-#endif
+	if(config->auth_plugin) _mosquitto_free(config->auth_plugin);
+	if(config->auth_options){
+		for(i=0; i<config->auth_option_count; i++){
+			_mosquitto_free(config->auth_options[i]);
+		}
+		_mosquitto_free(config->auth_options);
+		config->auth_options = NULL;
+		config->auth_option_count = 0;
+	}
 }
 
 static void print_usage(void)
@@ -237,8 +254,16 @@ int mqtt3_config_parse_args(mqtt3_config *config, int argc, char *argv[])
 		}else{
 			config->listeners[config->listener_count-1].port = 1883;
 		}
-		config->listeners[config->listener_count-1].host = config->default_listener.host;
-		config->listeners[config->listener_count-1].mount_point = config->default_listener.mount_point;
+		if(config->default_listener.host){
+			config->listeners[config->listener_count-1].host = config->default_listener.host;
+		}else{
+			config->listeners[config->listener_count-1].host = NULL;
+		}
+		if(config->default_listener.mount_point){
+			config->listeners[config->listener_count-1].mount_point = config->default_listener.host;
+		}else{
+			config->listeners[config->listener_count-1].mount_point = NULL;
+		}
 		config->listeners[config->listener_count-1].max_connections = config->default_listener.max_connections;
 		config->listeners[config->listener_count-1].client_count = 0;
 		config->listeners[config->listener_count-1].socks = NULL;
@@ -280,6 +305,7 @@ int mqtt3_config_read(mqtt3_config *config, bool reload)
 	int max_inflight_messages = 20;
 	int max_queued_messages = 100;
 	time_t expiration_mult;
+	char *key;
 	
 	if(!config->config_file) return 0;
 
@@ -343,6 +369,33 @@ int mqtt3_config_read(mqtt3_config *config, bool reload)
 #endif
 				}else if(!strcmp(token, "allow_anonymous")){
 					if(_conf_parse_bool(&token, "allow_anonymous", &config->allow_anonymous, saveptr)) return MOSQ_ERR_INVAL;
+				}else if(!strncmp(token, "auth_opt_", 9)){
+					key = _mosquitto_strdup(&token[8]);
+					if(!key){
+						_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory");
+						return MOSQ_ERR_NOMEM;
+					}
+					token = strtok_r(NULL, " ", &saveptr);
+					if(token){
+						config->auth_option_count++;
+						config->auth_options = _mosquitto_realloc(config->auth_options, config->auth_option_count*sizeof(struct _mqtt3_bridge));
+						if(!config->auth_options){
+							_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory.");
+							return MOSQ_ERR_NOMEM;
+						}
+						config->auth_options[config->auth_option_count-1]->key = key;
+						config->auth_options[config->auth_option_count-1]->value = _mosquitto_strdup(token);
+						if(!config->auth_options[config->auth_option_count-1]->value){
+							_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory.");
+							return MOSQ_ERR_NOMEM;
+						}
+					}else{
+						_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Empty %s value in configuration.", key);
+						return MOSQ_ERR_INVAL;
+					}
+				}else if(!strcmp(token, "auth_plugin")){
+					if(reload) continue; // Auth plugin not currently valid for reloading.
+					if(_conf_parse_string(&token, "auth_plugin", &config->auth_plugin, saveptr)) return MOSQ_ERR_INVAL;
 				}else if(!strcmp(token, "autosave_interval")){
 					if(_conf_parse_int(&token, "autosave_interval", &config->autosave_interval, saveptr)) return MOSQ_ERR_INVAL;
 					if(config->autosave_interval < 0) config->autosave_interval = 0;
@@ -891,7 +944,6 @@ int mqtt3_config_read(mqtt3_config *config, bool reload)
 #else
 					_mosquitto_log_printf(NULL, MOSQ_LOG_WARNING, "Warning: Bridge support not available.");
 #endif
-#ifdef WITH_EXTERNAL_SECURITY_CHECKS
 				}else if(!strcmp(token, "db_host")){
 					if(reload){
 						if(config->db_host){
@@ -926,7 +978,6 @@ int mqtt3_config_read(mqtt3_config *config, bool reload)
 					if(_conf_parse_string(&token, "db_password", &config->db_password, saveptr)) return MOSQ_ERR_INVAL;
 				}else if(!strcmp(token, "db_port")){
 					if(_conf_parse_int(&token, "db_port", &config->db_port, saveptr)) return MOSQ_ERR_INVAL;
-#endif
 				}else if(!strcmp(token, "trace_level")
 						|| !strcmp(token, "addresses")
 						|| !strcmp(token, "round_robin")
