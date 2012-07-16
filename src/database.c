@@ -47,6 +47,8 @@ static int max_queued = 100;
 
 uint64_t g_bytes_received = 0;
 uint64_t g_bytes_sent = 0;
+uint64_t g_pub_bytes_received = 0;
+uint64_t g_pub_bytes_sent = 0;
 unsigned long g_msgs_received = 0;
 unsigned long g_msgs_sent = 0;
 unsigned long g_pub_msgs_received = 0;
@@ -789,8 +791,12 @@ void mqtt3_db_sys_update(mosquitto_db *db, int interval, time_t start_time)
 	static unsigned int msgsps_sent = -1;
 	static unsigned long long bytes_received = -1;
 	static unsigned long long bytes_sent = -1;
+	static unsigned long long pub_bytes_received = -1;
+	static unsigned long long pub_bytes_sent = -1;
 	static unsigned int bytesps_received = -1;
 	static unsigned int bytesps_sent = -1;
+	static int subscription_count = -1;
+	static int retained_count = -1;
 
 	if(interval && now - interval > last_update){
 		uptime = now - start_time;
@@ -801,6 +807,18 @@ void mqtt3_db_sys_update(mosquitto_db *db, int interval, time_t start_time)
 			msg_store_count = db->msg_store_count;
 			snprintf(buf, 100, "%d", msg_store_count);
 			mqtt3_db_messages_easy_queue(db, NULL, "$SYS/broker/messages/stored", 2, strlen(buf), buf, 1);
+		}
+
+		if(db->subscription_count != subscription_count){
+			subscription_count = db->subscription_count;
+			snprintf(buf, 100, "%d", subscription_count);
+			mqtt3_db_messages_easy_queue(db, NULL, "$SYS/broker/subscriptions/count", 2, strlen(buf), buf, 1);
+		}
+
+		if(db->retained_count != retained_count){
+			retained_count = db->retained_count;
+			snprintf(buf, 100, "%d", retained_count);
+			mqtt3_db_messages_easy_queue(db, NULL, "$SYS/broker/retained messages/count", 2, strlen(buf), buf, 1);
 		}
 
 		if(!mqtt3_db_client_count(db, &value, &inactive)){
@@ -878,6 +896,18 @@ void mqtt3_db_sys_update(mosquitto_db *db, int interval, time_t start_time)
 			mqtt3_db_messages_easy_queue(db, NULL, "$SYS/broker/bytes/sent", 2, strlen(buf), buf, 1);
 		}
 		
+		if(pub_bytes_received != g_pub_bytes_received){
+			pub_bytes_received = g_pub_bytes_received;
+			snprintf(buf, 100, "%llu", pub_bytes_received);
+			mqtt3_db_messages_easy_queue(db, NULL, "$SYS/broker/publish/bytes/received", 2, strlen(buf), buf, 1);
+		}
+
+		if(pub_bytes_sent != g_pub_bytes_sent){
+			pub_bytes_sent = g_pub_bytes_sent;
+			snprintf(buf, 100, "%llu", pub_bytes_sent);
+			mqtt3_db_messages_easy_queue(db, NULL, "$SYS/broker/publish/bytes/sent", 2, strlen(buf), buf, 1);
+		}
+
 		if(uptime){
 			value = msgs_received/uptime;
 			if(msgsps_received != value){

@@ -6,6 +6,8 @@ Broker:
 - Add SSL support.
 - Add $SYS/broker/publish/messages/{sent|received} to show the number of
   PUBLISH messages sent/received.
+- Add $SYS/broker/publish/bytes/{sent|received} to show the number of
+  PUBLISH bytes sent/received.
 - Add reload parameter for security init/cleanup functions.
 - Add option for expiring disconnected persistent clients.
 - Add option for queueing of QoS 0 messages when persistent clients are
@@ -24,6 +26,7 @@ Broker:
 - Incoming bridge connections are now detected by checking if bit 8 of the
   protocol version number is set. This requires support from the remote broker.
 - Add support for notification_topic option.
+- Add $SYS/broker/subscriptions/count and $SYS/broker/retained messages/count.
 - Overlapping subscriptions are now handled properly. Fixes bug #928538.
 - Fix reloading of persistence_file and persistence_location.
 - Fix broker crash on incorrect protocol number.
@@ -57,6 +60,9 @@ Client library:
   connection results.
 - Add mosquitto_will_clear() and change mosquitto_will_set() to only set the
   will.
+- Add mosquitto_sub_topic_tokenise() and mosquitto_sub_topic_tokens_free()
+  utility functions to tokenise a subscription/topic string into a string
+  array.
 - Replaced mosquitto_log_init() with mosquitto_log_callback_set() to allow
   clients to decide what to do with log messages.
 - Client will now disconnect itself from the broker if it doesn't receive a
