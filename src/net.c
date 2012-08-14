@@ -53,15 +53,16 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <sys/socket.h>
 #endif
 
-#include <mqtt3.h>
+#include <mosquitto_broker.h>
 #include <mqtt3_protocol.h>
 #include <memory_mosq.h>
 #include <net_mosq.h>
+#include <util_mosq.h>
 
-uint64_t bytes_received = 0;
-uint64_t bytes_sent = 0;
-unsigned long msgs_received = 0;
-unsigned long msgs_sent = 0;
+#ifdef WITH_TLS
+static int tls_ex_index_context = -1;
+static int tls_ex_index_listener = -1;
+#endif
 
 int mqtt3_socket_accept(struct _mosquitto_db *db, int listensock)
 {
@@ -71,6 +72,10 @@ int mqtt3_socket_accept(struct _mosquitto_db *db, int listensock)
 	struct mosquitto **tmp_contexts = NULL;
 	struct mosquitto *new_context;
 	int opt = 1;
+#ifdef WITH_TLS
+	BIO *bio;
+	int rc;
+#endif
 #ifdef WITH_WRAP
 	struct request_info wrap_req;
 #endif
@@ -144,11 +149,95 @@ int mqtt3_socket_accept(struct _mosquitto_db *db, int listensock)
 			}
 		}
 		new_context->listener->client_count++;
+
+#ifdef WITH_TLS
+		/* TLS init */
+		for(i=0; i<db->config->listener_count; i++){
+			for(j=0; j<db->config->listeners[i].sock_count; j++){
+				if(db->config->listeners[i].socks[j] == listensock){
+					if(db->config->listeners[i].ssl_ctx){
+						new_context->ssl = SSL_new(db->config->listeners[i].ssl_ctx);
+						if(!new_context->ssl){
+							COMPAT_CLOSE(new_sock);
+							return -1;
+						}
+						SSL_set_ex_data(new_context->ssl, tls_ex_index_context, new_context);
+						SSL_set_ex_data(new_context->ssl, tls_ex_index_listener, &db->config->listeners[i]);
+						new_context->want_read = true;
+						new_context->want_write = true;
+						bio = BIO_new_socket(new_sock, BIO_NOCLOSE);
+						SSL_set_bio(new_context->ssl, bio, bio);
+						rc = SSL_accept(new_context->ssl);
+						if(rc != 1){
+							rc = SSL_get_error(new_context->ssl, rc);
+							if(rc == SSL_ERROR_WANT_READ){
+								new_context->want_read = true;
+							}else if(rc == SSL_ERROR_WANT_WRITE){
+								new_context->want_write = true;
+							}
+						}
+					}
+				}
+			}
+		}
+#endif
+
 #ifdef WITH_WRAP
 	}
 #endif
 	return new_sock;
 }
+
+#ifdef WITH_TLS
+static int client_certificate_verify(int preverify_ok, X509_STORE_CTX *ctx)
+{
+	/* Preverify should check expiry, revocation. */
+	return preverify_ok;
+}
+#endif
+
+#if defined(WITH_TLS) && defined(WITH_TLS_PSK)
+static unsigned int psk_server_callback(SSL *ssl, const char *identity, unsigned char *psk, unsigned int max_psk_len)
+{
+	struct _mosquitto_db *db;
+	struct mosquitto *context;
+	struct _mqtt3_listener *listener;
+	char *psk_key = NULL;
+	int len;
+	const char *psk_hint;
+
+	if(!identity) return 0;
+
+	db = _mosquitto_get_db();
+
+	context = SSL_get_ex_data(ssl, tls_ex_index_context);
+	if(!context) return 0;
+
+	listener = SSL_get_ex_data(ssl, tls_ex_index_listener);
+	if(!listener) return 0;
+
+	psk_hint = listener->psk_hint;
+
+	/* The hex to BN conversion results in the length halving, so we can pass
+	 * max_psk_len*2 as the max hex key here. */
+	psk_key = _mosquitto_calloc(1, max_psk_len*2 + 1);
+	if(!psk_key) return 0;
+
+	if(mosquitto_psk_key_get(db, psk_hint, identity, psk_key, max_psk_len*2) != MOSQ_ERR_SUCCESS){
+		return 0;
+	}
+
+	len = _mosquitto_hex2bin(psk_key, psk, max_psk_len);
+	if (len < 0) return 0;
+
+	if(listener->use_identity_as_username){
+		context->username = _mosquitto_strdup(identity);
+		if(!context->username) return 0;
+	}
+
+	return len;
+}
+#endif
 
 /* Creates a socket and listens on port 'port'.
  * Returns 1 on failure
@@ -166,6 +255,12 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 #else
 	char ss_opt = 1;
 #endif
+#ifdef WITH_TLS
+	int rc;
+	X509_STORE *store;
+	X509_LOOKUP *lookup;
+#endif
+	char err[256];
 
 	if(!listener) return MOSQ_ERR_INVAL;
 
@@ -191,7 +286,8 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 
 		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if(sock == -1){
-			_mosquitto_log_printf(NULL, MOSQ_LOG_WARNING, "Warning: %s", strerror(errno));
+			strerror_r(errno, err, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_WARNING, "Warning: %s", err);
 			continue;
 		}
 		listener->sock_count++;
@@ -226,13 +322,15 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 #endif
 
 		if(bind(sock, rp->ai_addr, rp->ai_addrlen) == -1){
-			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s", strerror(errno));
+			strerror_r(errno, err, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s", err);
 			COMPAT_CLOSE(sock);
 			return 1;
 		}
 
 		if(listen(sock, 100) == -1){
-			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s", strerror(errno));
+			strerror_r(errno, err, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s", err);
 			COMPAT_CLOSE(sock);
 			return 1;
 		}
@@ -241,29 +339,114 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 
 	/* We need to have at least one working socket. */
 	if(listener->sock_count > 0){
+#ifdef WITH_TLS
+		if((listener->cafile || listener->capath) && listener->certfile && listener->keyfile){
+			listener->ssl_ctx = SSL_CTX_new(TLSv1_server_method());
+			if(!listener->ssl_ctx){
+				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to create TLS context.");
+				COMPAT_CLOSE(sock);
+				return 1;
+			}
+			if(listener->ciphers){
+				rc = SSL_CTX_set_cipher_list(listener->ssl_ctx, listener->ciphers);
+				if(rc == 0){
+					_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to set TLS ciphers. Check cipher list \"%s\".", listener->ciphers);
+					COMPAT_CLOSE(sock);
+					return 1;
+				}
+			}
+			rc = SSL_CTX_load_verify_locations(listener->ssl_ctx, listener->cafile, listener->capath);
+			if(rc == 0){
+				if(listener->cafile && listener->capath){
+					_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to load CA certificates. Check cafile \"%s\" and capath \"%s\".", listener->cafile, listener->capath);
+				}else if(listener->cafile){
+					_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to load CA certificates. Check cafile \"%s\".", listener->cafile);
+				}else{
+					_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to load CA certificates. Check capath \"%s\".", listener->capath);
+				}
+				COMPAT_CLOSE(sock);
+				return 1;
+			}
+			/* FIXME user data? */
+			if(listener->require_certificate){
+				SSL_CTX_set_verify(listener->ssl_ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, client_certificate_verify);
+			}else{
+				SSL_CTX_set_verify(listener->ssl_ctx, SSL_VERIFY_PEER, client_certificate_verify);
+			}
+			rc = SSL_CTX_use_certificate_file(listener->ssl_ctx, listener->certfile, SSL_FILETYPE_PEM);
+			if(rc != 1){
+				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to load server certificate \"%s\". Check certfile.", listener->certfile);
+				COMPAT_CLOSE(sock);
+				return 1;
+			}
+			rc = SSL_CTX_use_PrivateKey_file(listener->ssl_ctx, listener->keyfile, SSL_FILETYPE_PEM);
+			if(rc != 1){
+				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to load server key file \"%s\". Check keyfile.", listener->keyfile);
+				COMPAT_CLOSE(sock);
+				return 1;
+			}
+			rc = SSL_CTX_check_private_key(listener->ssl_ctx);
+			if(rc != 1){
+				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Server certificate/key are inconsistent.");
+				COMPAT_CLOSE(sock);
+				return 1;
+			}
+			/* Load CRLs if they exist. */
+			if(listener->crlfile){
+				store = SSL_CTX_get_cert_store(listener->ssl_ctx);
+				if(!store){
+					_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to obtain TLS store.");
+					COMPAT_CLOSE(sock);
+					return 1;
+				}
+				lookup = X509_STORE_add_lookup(store, X509_LOOKUP_file());
+				rc = X509_load_crl_file(lookup, listener->crlfile, X509_FILETYPE_PEM);
+				if(rc != 1){
+					_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to load certificate revocation file \"%s\". Check crlfile.", listener->crlfile);
+					COMPAT_CLOSE(sock);
+					return 1;
+				}
+				X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK);
+			}
+
+#  ifdef WITH_TLS_PSK
+		}else if(listener->psk_hint){
+			if(tls_ex_index_context == -1){
+				tls_ex_index_context = SSL_get_ex_new_index(0, "client context", NULL, NULL, NULL);
+			}
+			if(tls_ex_index_listener == -1){
+				tls_ex_index_listener = SSL_get_ex_new_index(0, "listener", NULL, NULL, NULL);
+			}
+
+			listener->ssl_ctx = SSL_CTX_new(TLSv1_server_method());
+			if(!listener->ssl_ctx){
+				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to create TLS context.");
+				COMPAT_CLOSE(sock);
+				return 1;
+			}
+			SSL_CTX_set_psk_server_callback(listener->ssl_ctx, psk_server_callback);
+			if(listener->psk_hint){
+				rc = SSL_CTX_use_psk_identity_hint(listener->ssl_ctx, listener->psk_hint);
+				if(rc == 0){
+					_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to set TLS PSK hint.");
+					COMPAT_CLOSE(sock);
+					return 1;
+				}
+			}
+			if(listener->ciphers){
+				rc = SSL_CTX_set_cipher_list(listener->ssl_ctx, listener->ciphers);
+				if(rc == 0){
+					_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to set TLS ciphers. Check cipher list \"%s\".", listener->ciphers);
+					COMPAT_CLOSE(sock);
+					return 1;
+				}
+			}
+#  endif /* WITH_TLS_PSK */
+		}
+#endif /* WITH_TLS */
 		return 0;
 	}else{
 		return 1;
 	}
-}
-
-uint64_t mqtt3_net_bytes_total_received(void)
-{
-	return bytes_received;
-}
-
-uint64_t mqtt3_net_bytes_total_sent(void)
-{
-	return bytes_sent;
-}
-
-unsigned long mqtt3_net_msgs_total_received(void)
-{
-	return msgs_received;
-}
-
-unsigned long mqtt3_net_msgs_total_sent(void)
-{
-	return msgs_sent;
 }
 

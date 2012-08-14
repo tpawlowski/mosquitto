@@ -1,11 +1,12 @@
-<?xml version='1.0' encoding='ISO-8859-1'?>
-<?xml-stylesheet type="text/xsl" href="http://docbook.sourceforge.net/release/xsl/current/manpages/docbook.xsl"?>
-<!DOCTYPE refentry PUBLIC "-//OASIS//DTD DocBook XML V4.4//EN" "/usr/share/sgml/docbook/xml-dtd-4.4/docbookx.dtd">
+<?xml version='1.0' encoding='UTF-8'?>
+<?xml-stylesheet type="text/xsl" href="manpage.xsl"?>
 
-<refentry xml:id="mosquitto">
+<refentry xml:id="mosquitto" xmlns:xlink="http://www.w3.org/1999/xlink">
 	<refmeta>
 		<refentrytitle>mosquitto</refentrytitle>
 		<manvolnum>8</manvolnum>
+		<refmiscinfo class="source">Mosquitto Project</refmiscinfo>
+		<refmiscinfo class="manual">System management commands</refmiscinfo>
 	</refmeta>
 
 	<refnamediv>
@@ -16,16 +17,12 @@
 	<refsynopsisdiv>
 		<cmdsynopsis>
 			<command>mosquitto</command>
-			<group choice='opt'>
-				<arg><option>-c</option> <replaceable>config file</replaceable></arg>
+			<arg>-c <replaceable>config file</replaceable></arg>
+			<group>
+				<arg choice='plain'>-d</arg>
+				<arg choice='plain'>--daemon</arg>
 			</group>
-			<group choice='opt'>
-				<arg><option>-d</option></arg>
-				<arg><option>--daemon</option></arg>
-			</group>
-			<group choice='opt'>
-				<arg><option>-p</option> <replaceable>port number</replaceable></arg>
-			</group>
+			<arg>-p <replaceable>port number</replaceable></arg>
 		</cmdsynopsis>
 	</refsynopsisdiv>
 
@@ -62,14 +59,14 @@
 	</refsect1>
 
 	<refsect1>
-		<title>Limitations</title>
-		<para><command>mosquitto</command> implements all of the mqtt protocol version 3.1, but there are some limitations compared to rsmb.</para>
-		<itemizedlist mark="circle">
-			<listitem><para>There are fewer configuration options.</para></listitem>
-			<listitem><para>There is less logging information.</para></listitem>
-			<listitem><para>It isn't as well tested or documented...</para></listitem>
-		</itemizedlist>
-		<para>It should be noted that all of the above limitations should have &quot;currently&quot; included in them. They will all be fixed at some point.</para>
+		<title>Configuration</title>
+		<para>The broker can be configured using a configuration file as
+			described in
+			<citerefentry><refentrytitle>mosquitto.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>
+			and this is the main point of information for mosquitto.
+			The files required for SSL/TLS support are described in 
+			<citerefentry><refentrytitle>mosquitto-tls</refentrytitle><manvolnum>7</manvolnum></citerefentry>.
+		</para>
 	</refsect1>
 
 	<refsect1>
@@ -144,6 +141,18 @@
 				</listitem>
 			</varlistentry>
 			<varlistentry>
+				<term><option>$SYS/broker/connection/#</option></term>
+				<listitem>
+					<para>When bridges are configured to/from the broker,
+						common practice is to provide a status topic that
+						indicates the state of the connection. This is provided
+						within $SYS/broker/connection/ by default. If the value
+						of the topic is 1 the connection is active, if 0 then
+						it is not active. See the Bridges section below for
+						more information on bridges.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
 				<term><option>$SYS/broker/heap/current size</option></term>
 				<listitem>
 					<para>The current size of the heap memory in use by
@@ -181,19 +190,43 @@
 			<varlistentry>
 				<term><option>$SYS/broker/messages/received</option></term>
 				<listitem>
-					<para>The total number of messages received since the broker started.</para>
+					<para>The total number of messages of any type received since the broker started.</para>
 				</listitem>
 			</varlistentry>
 			<varlistentry>
 				<term><option>$SYS/broker/messages/sent</option></term>
 				<listitem>
-					<para>The total number of messages sent since the broker started.</para>
+					<para>The total number of messages of any type sent since the broker started.</para>
 				</listitem>
 			</varlistentry>
 			<varlistentry>
 				<term><option>$SYS/broker/messages/stored</option></term>
 				<listitem>
 					<para>The number of messages currently held in the message store.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>$SYS/broker/publish/messages/received</option></term>
+				<listitem>
+					<para>The total number of PUBLISH messages received since the broker started.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>$SYS/broker/publish/messages/sent</option></term>
+				<listitem>
+					<para>The total number of PUBLISH messages sent since the broker started.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>$SYS/broker/retained messages/count</option></term>
+				<listitem>
+					<para>The total number of retained messages active on the broker.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>$SYS/broker/subscriptions/count</option></term>
+				<listitem>
+					<para>The total number of subscriptions active on the broker.</para>
 				</listitem>
 			</varlistentry>
 			<varlistentry>
@@ -297,16 +330,6 @@
 				</listitem>
 			</varlistentry>
 			<varlistentry>
-				<term>SIGHUP</term>
-				<listitem>
-					<para>Upon receiving the SIGHUP signal, mosquitto will
-					attempt to reload its configuration. Not all configuration
-					parameters can be reloaded without a restart. See
-					<citerefentry><refentrytitle>mosquitto.conf</refentrytitle><manvolnum>5</manvolnum></citerefentry>
-					for details.</para>
-				</listitem>
-			</varlistentry>
-			<varlistentry>
 				<term>SIGUSR2</term>
 				<listitem>
 					<para>The SIGUSR2 signal causes mosquitto to print out the
@@ -352,27 +375,35 @@
 		<title>See Also</title>
 		<para>
 			<citerefentry>
-				<refentrytitle>mqtt</refentrytitle>
+				<refentrytitle><link xlink:href="mqtt-7.html">mqtt</link></refentrytitle>
 				<manvolnum>7</manvolnum>
 			</citerefentry>
 			<citerefentry>
-				<refentrytitle>mosquitto.conf</refentrytitle>
+				<refentrytitle><link xlink:href="mosquitto-tls-7.html">mosquitto-tls</link></refentrytitle>
+				<manvolnum>7</manvolnum>
+			</citerefentry>
+			<citerefentry>
+				<refentrytitle><link xlink:href="mosquitto-conf-5.html">mosquitto.conf</link></refentrytitle>
 				<manvolnum>5</manvolnum>
 			</citerefentry>
 			<citerefentry>
-				<refentrytitle>hosts_access</refentrytitle>
+				<refentrytitle><link xlink:href="http://www.linuxmanpages.com/man5/hosts_access.5.php">hosts_access</link></refentrytitle>
 				<manvolnum>5</manvolnum>
 			</citerefentry>
 			<citerefentry>
-				<refentrytitle>mosquitto_pub</refentrytitle>
+				<refentrytitle><link xlink:href="mosquitto_passwd-1.html">mosquitto_passwd</link></refentrytitle>
 				<manvolnum>1</manvolnum>
 			</citerefentry>
 			<citerefentry>
-				<refentrytitle>mosquitto_sub</refentrytitle>
+				<refentrytitle><link xlink:href="mosquitto_pub-1.html">mosquitto_pub</link></refentrytitle>
 				<manvolnum>1</manvolnum>
 			</citerefentry>
 			<citerefentry>
-				<refentrytitle>libmosquitto</refentrytitle>
+				<refentrytitle><link xlink:href="mosquitto_sub-1.html">mosquitto_sub</link></refentrytitle>
+				<manvolnum>1</manvolnum>
+			</citerefentry>
+			<citerefentry>
+				<refentrytitle><link xlink:href="libmosquitto-3.html">libmosquitto</link></refentrytitle>
 				<manvolnum>3</manvolnum>
 			</citerefentry>
 		</para>
@@ -380,8 +411,22 @@
 
 	<refsect1>
 		<title>Thanks</title>
-		<para>Thanks to Andy Stanford-Clark for being one of the people who came up with MQTT in the first place and providing clarifications of the protocol.</para>
-		<para>Thanks also to everybody at the Ubuntu UK Podcast and Linux Outlaws for organising OggCamp, where Andy gave a talk that inspired mosquitto.</para>
+		<para>Thanks to Andy Stanford-Clark for being one of the people who
+			came up with MQTT in the first place. Thanks to Andy and Nicholas
+			O'Leary for providing clarifications of the protocol.</para>
+		<para>Thanks also to everybody at the Ubuntu UK Podcast and Linux
+			Outlaws for organising OggCamp, where Andy gave a talk that
+			inspired mosquitto.</para>
+	</refsect1>
+
+	<refsect1>
+		<title>Acknowledgements</title>
+		<para>This product includes software developed by the OpenSSL Project
+			for use in the OpenSSL Toolkit. (http://www.openssl.org/)</para>
+		<para>This product includes cryptographic software written by Eric
+			Young (eay@cryptsoft.com)</para>
+		<para>This product includes software written by Tim Hudson
+			(tjh@cryptsoft.com)</para>
 	</refsect1>
 
 	<refsect1>

@@ -53,6 +53,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #define STATUS_CONNECTING 0
 #define STATUS_CONNACK_RECVD 1
 
+/* Global variables for use in callbacks. See sub_client.c for an example of
+ * using a struct to hold variables for use in callbacks. */
 static char *topic = NULL;
 static char *message = NULL;
 static long msglen = 0;
@@ -60,16 +62,15 @@ static int qos = 0;
 static int retain = 0;
 static int mode = MSGMODE_NONE;
 static int status = STATUS_CONNECTING;
-static uint16_t mid_sent = 0;
+static int mid_sent = 0;
 static bool connected = true;
 static char *username = NULL;
 static char *password = NULL;
 static bool disconnect_sent = false;
 static bool quiet = false;
 
-void my_connect_callback(void *obj, int result)
+void my_connect_callback(struct mosquitto *mosq, void *obj, int result)
 {
-	struct mosquitto *mosq = obj;
 	int rc = MOSQ_ERR_SUCCESS;
 
 	if(!result){
@@ -77,7 +78,7 @@ void my_connect_callback(void *obj, int result)
 			case MSGMODE_CMD:
 			case MSGMODE_FILE:
 			case MSGMODE_STDIN_FILE:
-				rc = mosquitto_publish(mosq, &mid_sent, topic, msglen, (uint8_t *)message, qos, retain);
+				rc = mosquitto_publish(mosq, &mid_sent, topic, msglen, message, qos, retain);
 				break;
 			case MSGMODE_NULL:
 				rc = mosquitto_publish(mosq, &mid_sent, topic, 0, NULL, qos, retain);
@@ -109,42 +110,28 @@ void my_connect_callback(void *obj, int result)
 			mosquitto_disconnect(mosq);
 		}
 	}else{
-		switch(result){
-			case 1:
-				if(!quiet) fprintf(stderr, "Connection Refused: unacceptable protocol version\n");
-				break;
-			case 2:
-				if(!quiet) fprintf(stderr, "Connection Refused: identifier rejected\n");
-				break;
-			case 3:
-				if(!quiet) fprintf(stderr, "Connection Refused: broker unavailable\n");
-				break;
-			case 4:
-				if(!quiet) fprintf(stderr, "Connection Refused: bad user name or password\n");
-				break;
-			case 5:
-				if(!quiet) fprintf(stderr, "Connection Refused: not authorised\n");
-				break;
-			default:
-				if(!quiet) fprintf(stderr, "Connection Refused: unknown reason\n");
-				break;
+		if(result && !quiet){
+			fprintf(stderr, "%s\n", mosquitto_connack_string(result));
 		}
 	}
 }
 
-void my_disconnect_callback(void *obj)
+void my_disconnect_callback(struct mosquitto *mosq, void *obj, int rc)
 {
 	connected = false;
 }
 
-void my_publish_callback(void *obj, uint16_t mid)
+void my_publish_callback(struct mosquitto *mosq, void *obj, int mid)
 {
-	struct mosquitto *mosq = obj;
-
 	if(mode != MSGMODE_STDIN_LINE && disconnect_sent == false){
 		mosquitto_disconnect(mosq);
 		disconnect_sent = true;
 	}
+}
+
+void my_log_callback(struct mosquitto *mosq, void *obj, int level, const char *str)
+{
+	printf("%s\n", str);
 }
 
 int load_stdin(void)
@@ -220,7 +207,10 @@ void print_usage(void)
 	printf("                     [-i id] [-I id_prefix]\n");
 	printf("                     [-d] [--quiet]\n");
 	printf("                     [-u username [-P password]]\n");
-	printf("                     [--will-topic [--will-payload payload] [--will-qos qos] [--will-retain]]\n\n");
+	printf("                     [--will-topic [--will-payload payload] [--will-qos qos] [--will-retain]]\n");
+	printf("                     [{--cafile file | --capath dir} [--cert file] [--key file]]\n");
+	printf("                     [--psk hex-key --psk-identity identity]\n");
+	printf("       mosquitto_pub --help\n\n");
 	printf(" -d : enable debug messages.\n");
 	printf(" -f : send the contents of a file as the message.\n");
 	printf(" -h : mqtt host to connect to. Defaults to localhost.\n");
@@ -237,6 +227,7 @@ void print_usage(void)
 	printf(" -t : mqtt topic to publish to.\n");
 	printf(" -u : provide a username (requires MQTT 3.1 broker)\n");
 	printf(" -P : provide a password (requires MQTT 3.1 broker)\n");
+	printf(" --help : display this message.\n");
 	printf(" --quiet : don't print error messages.\n");
 	printf(" --will-payload : payload for the client Will, which is sent by the broker in case of\n");
 	printf("                  unexpected disconnection. If not given and will-topic is set, a zero\n");
@@ -244,6 +235,14 @@ void print_usage(void)
 	printf(" --will-qos : QoS level for the client Will.\n");
 	printf(" --will-retain : if given, make the client Will retained.\n");
 	printf(" --will-topic : the topic on which to publish the client Will.\n");
+	printf(" --cafile : path to a file containing trusted CA certificates to enable encrypted\n");
+	printf("            communication.\n");
+	printf(" --capath : path to a directory containing trusted CA certificates to enable encrypted\n");
+	printf("            communication.\n");
+	printf(" --cert : client certificate for authentication, if required by server.\n");
+	printf(" --key : client private key for authentication, if required by server.\n");
+	printf(" --psk : pre-shared-key in hexadecimal (no leading 0x) to enable TLS-PSK mode.\n");
+	printf(" --psk-identity : client identity string for TLS-PSK mode.\n");
 	printf("\nSee http://mosquitto.org/ for more information.\n\n");
 }
 
@@ -255,20 +254,31 @@ int main(int argc, char *argv[])
 	char *host = "localhost";
 	int port = 1883;
 	int keepalive = 60;
+#ifndef WIN32
 	int opt;
+#endif
 	char buf[1024];
 	bool debug = false;
 	struct mosquitto *mosq = NULL;
 	int rc;
 	int rc2;
-	char hostname[21];
+	char hostname[256];
 	char err[1024];
+	int len;
 
-	uint8_t *will_payload = NULL;
+	char *will_payload = NULL;
 	long will_payloadlen = 0;
 	int will_qos = 0;
 	bool will_retain = false;
 	char *will_topic = NULL;
+
+	char *cafile = NULL;
+	char *capath = NULL;
+	char *certfile = NULL;
+	char *keyfile = NULL;
+
+	char *psk = NULL;
+	char *psk_identity = NULL;
 
 	for(i=1; i<argc; i++){
 		if(!strcmp(argv[i], "-p") || !strcmp(argv[i], "--port")){
@@ -283,6 +293,33 @@ int main(int argc, char *argv[])
 					print_usage();
 					return 1;
 				}
+			}
+			i++;
+		}else if(!strcmp(argv[i], "--cafile")){
+			if(i==argc-1){
+				fprintf(stderr, "Error: --cafile argument given but no file specified.\n\n");
+				print_usage();
+				return 1;
+			}else{
+				cafile = argv[i+1];
+			}
+			i++;
+		}else if(!strcmp(argv[i], "--capath")){
+			if(i==argc-1){
+				fprintf(stderr, "Error: --capath argument given but no directory specified.\n\n");
+				print_usage();
+				return 1;
+			}else{
+				capath = argv[i+1];
+			}
+			i++;
+		}else if(!strcmp(argv[i], "--cert")){
+			if(i==argc-1){
+				fprintf(stderr, "Error: --cert argument given but no file specified.\n\n");
+				print_usage();
+				return 1;
+			}else{
+				certfile = argv[i+1];
 			}
 			i++;
 		}else if(!strcmp(argv[i], "-d") || !strcmp(argv[i], "--debug")){
@@ -300,6 +337,9 @@ int main(int argc, char *argv[])
 				if(load_file(argv[i+1])) return 1;
 			}
 			i++;
+		}else if(!strcmp(argv[i], "--help")){
+			print_usage();
+			return 0;
 		}else if(!strcmp(argv[i], "-h") || !strcmp(argv[i], "--host")){
 			if(i==argc-1){
 				fprintf(stderr, "Error: -h argument given but no host specified.\n\n");
@@ -335,6 +375,15 @@ int main(int argc, char *argv[])
 				return 1;
 			}else{
 				id_prefix = argv[i+1];
+			}
+			i++;
+		}else if(!strcmp(argv[i], "--key")){
+			if(i==argc-1){
+				fprintf(stderr, "Error: --key argument given but no file specified.\n\n");
+				print_usage();
+				return 1;
+			}else{
+				keyfile = argv[i+1];
 			}
 			i++;
 		}else if(!strcmp(argv[i], "-l") || !strcmp(argv[i], "--stdin-line")){
@@ -375,6 +424,24 @@ int main(int argc, char *argv[])
 			}else{
 				mode = MSGMODE_NULL;
 			}
+		}else if(!strcmp(argv[i], "--psk")){
+			if(i==argc-1){
+				fprintf(stderr, "Error: --psk argument given but no key specified.\n\n");
+				print_usage();
+				return 1;
+			}else{
+				psk = argv[i+1];
+			}
+			i++;
+		}else if(!strcmp(argv[i], "--psk-identity")){
+			if(i==argc-1){
+				fprintf(stderr, "Error: --psk-identity argument given but no identity specified.\n\n");
+				print_usage();
+				return 1;
+			}else{
+				psk_identity = argv[i+1];
+			}
+			i++;
 		}else if(!strcmp(argv[i], "-q") || !strcmp(argv[i], "--qos")){
 			if(i==argc-1){
 				fprintf(stderr, "Error: -q argument given but no QoS specified.\n\n");
@@ -434,8 +501,8 @@ int main(int argc, char *argv[])
 				print_usage();
 				return 1;
 			}else{
-				will_payload = (uint8_t *)argv[i+1];
-				will_payloadlen = strlen((char *)will_payload);
+				will_payload = argv[i+1];
+				will_payloadlen = strlen(will_payload);
 			}
 			i++;
 		}else if(!strcmp(argv[i], "--will-qos")){
@@ -468,23 +535,6 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 	}
-	if(id_prefix){
-		id = malloc(strlen(id_prefix)+10);
-		if(!id){
-			if(!quiet) fprintf(stderr, "Error: Out of memory.\n");
-			return 1;
-		}
-		snprintf(id, strlen(id_prefix)+10, "%s%d", id_prefix, getpid());
-	}else if(!id){
-		id = malloc(30);
-		if(!id){
-			if(!quiet) fprintf(stderr, "Error: Out of memory.\n");
-			return 1;
-		}
-		memset(hostname, 0, 21);
-		gethostname(hostname, 20);
-		snprintf(id, 23, "mosq_pub_%d_%s", getpid(), hostname);
-	}
 
 	if(!topic || mode == MSGMODE_NONE){
 		fprintf(stderr, "Error: Both topic and message must be supplied.\n");
@@ -505,30 +555,86 @@ int main(int argc, char *argv[])
 	if(password && !username){
 		if(!quiet) fprintf(stderr, "Warning: Not using password since username not set.\n");
 	}
+	if((certfile && !keyfile) || (keyfile && !certfile)){
+		fprintf(stderr, "Error: Both certfile and keyfile must be provided if one of them is.\n");
+		print_usage();
+		return 1;
+	}
+	if((cafile || capath) && psk){
+		if(!quiet) fprintf(stderr, "Error: Only one of --psk or --cafile/--capath may be used at once.\n");
+		return 1;
+	}
+	if(psk && !psk_identity){
+		if(!quiet) fprintf(stderr, "Error: --psk-identity required if --psk used.\n");
+		return 1;
+	}
+
 	mosquitto_lib_init();
-	mosq = mosquitto_new(id, NULL);
+
+	if(id_prefix){
+		id = malloc(strlen(id_prefix)+10);
+		if(!id){
+			if(!quiet) fprintf(stderr, "Error: Out of memory.\n");
+			mosquitto_lib_cleanup();
+			return 1;
+		}
+		snprintf(id, strlen(id_prefix)+10, "%s%d", id_prefix, getpid());
+	}else if(!id){
+		hostname[0] = '\0';
+		gethostname(hostname, 256);
+		hostname[255] = '\0';
+		len = strlen("mosqpub/-") + 6 + strlen(hostname);
+		id = malloc(len);
+		if(!id){
+			if(!quiet) fprintf(stderr, "Error: Out of memory.\n");
+			mosquitto_lib_cleanup();
+			return 1;
+		}
+		snprintf(id, len, "mosqpub/%d-%s", getpid(), hostname);
+		id[MOSQ_MQTT_ID_MAX_LENGTH] = '\0';
+	}
+
+	mosq = mosquitto_new(id, true, NULL);
 	if(!mosq){
-		if(!quiet) fprintf(stderr, "Error: Out of memory.\n");
+		switch(errno){
+			case ENOMEM:
+				if(!quiet) fprintf(stderr, "Error: Out of memory.\n");
+				break;
+			case EINVAL:
+				if(!quiet) fprintf(stderr, "Error: Invalid id.\n");
+				break;
+		}
+		mosquitto_lib_cleanup();
 		return 1;
 	}
 	if(debug){
-		mosquitto_log_init(mosq, MOSQ_LOG_DEBUG | MOSQ_LOG_ERR | MOSQ_LOG_WARNING
-				| MOSQ_LOG_NOTICE | MOSQ_LOG_INFO, MOSQ_LOG_STDERR);
+		mosquitto_log_callback_set(mosq, my_log_callback);
 	}
-	if(will_topic && mosquitto_will_set(mosq, true, will_topic, will_payloadlen, will_payload, will_qos, will_retain)){
+	if(will_topic && mosquitto_will_set(mosq, will_topic, will_payloadlen, will_payload, will_qos, will_retain)){
 		if(!quiet) fprintf(stderr, "Error: Problem setting will.\n");
+		mosquitto_lib_cleanup();
 		return 1;
 	}
 	if(username && mosquitto_username_pw_set(mosq, username, password)){
 		if(!quiet) fprintf(stderr, "Error: Problem setting username and password.\n");
+		mosquitto_lib_cleanup();
 		return 1;
 	}
-
+	if((cafile || capath) && mosquitto_tls_set(mosq, cafile, capath, certfile, keyfile, NULL)){
+		if(!quiet) fprintf(stderr, "Error: Problem setting TLS options.\n");
+		mosquitto_lib_cleanup();
+		return 1;
+	}
+	if(psk && mosquitto_tls_psk_set(mosq, psk, psk_identity, NULL)){
+		if(!quiet) fprintf(stderr, "Error: Problem setting TLS-PSK options.\n");
+		mosquitto_lib_cleanup();
+		return 1;
+	}
 	mosquitto_connect_callback_set(mosq, my_connect_callback);
 	mosquitto_disconnect_callback_set(mosq, my_disconnect_callback);
 	mosquitto_publish_callback_set(mosq, my_publish_callback);
 
-	rc = mosquitto_connect(mosq, host, port, keepalive, true);
+	rc = mosquitto_connect(mosq, host, port, keepalive);
 	if(rc){
 		if(!quiet){
 			if(rc == MOSQ_ERR_ERRNO){
@@ -542,6 +648,7 @@ int main(int argc, char *argv[])
 				fprintf(stderr, "Unable to connect (%d).\n", rc);
 			}
 		}
+		mosquitto_lib_cleanup();
 		return rc;
 	}
 
@@ -549,7 +656,7 @@ int main(int argc, char *argv[])
 		if(mode == MSGMODE_STDIN_LINE && status == STATUS_CONNACK_RECVD){
 			if(fgets(buf, 1024, stdin)){
 				buf[strlen(buf)-1] = '\0';
-				rc2 = mosquitto_publish(mosq, &mid_sent, topic, strlen(buf), (uint8_t *)buf, qos, retain);
+				rc2 = mosquitto_publish(mosq, &mid_sent, topic, strlen(buf), buf, qos, retain);
 				if(rc2){
 					if(!quiet) fprintf(stderr, "Error: Publish returned %d, disconnecting.\n", rc2);
 					mosquitto_disconnect(mosq);
@@ -559,7 +666,7 @@ int main(int argc, char *argv[])
 				disconnect_sent = true;
 			}
 		}
-		rc = mosquitto_loop(mosq, -1);
+		rc = mosquitto_loop(mosq, -1, 1);
 	}while(rc == MOSQ_ERR_SUCCESS && connected);
 
 	if(message && mode == MSGMODE_FILE){
@@ -567,5 +674,13 @@ int main(int argc, char *argv[])
 	}
 	mosquitto_destroy(mosq);
 	mosquitto_lib_cleanup();
+
+	if(rc){
+		if(rc == MOSQ_ERR_ERRNO){
+			fprintf(stderr, "Error: %s\n", strerror(errno));
+		}else{
+			fprintf(stderr, "Error: %s\n", mosquitto_strerror(rc));
+		}
+	}
 	return rc;
 }

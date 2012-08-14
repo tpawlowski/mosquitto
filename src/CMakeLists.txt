@@ -6,18 +6,19 @@ set (MOSQ_SRCS
 	conf.c
 	context.c
 	database.c
+	lib_load.h
 	logging.c
 	loop.c
 	../lib/memory_mosq.c ../lib/memory_mosq.h
 	mosquitto.c
-	mqtt3.h
+	mosquitto_broker.h
 	net.c
 	../lib/net_mosq.c ../lib/net_mosq.h
 	persist.c persist.h
 	read_handle.c read_handle_client.c read_handle_server.c
 	../lib/read_handle_shared.c ../lib/read_handle.h
 	subs.c
-	security.c security_external.c
+	security.c security_default.c
 	../lib/send_client_mosq.c ../lib/send_mosq.h
 	../lib/send_mosq.c ../lib/send_mosq.h
 	send_server.c
@@ -61,23 +62,25 @@ if (WIN32 OR CYGWIN)
 	set (MOSQ_SRCS ${MOSQ_SRCS} service.c)
 endif (WIN32 OR CYGWIN)
 
-option(WITH_EXTERNAL_SECURITY_CHECKS
-	"Use external security checks (needs additional code)?" OFF)
-if (${WITH_EXTERNAL_SECURITY_CHECKS} STREQUAL ON)
-	add_definitions("-DWITH_EXTERNAL_SECURITY_CHECKS")
-endif (${WITH_EXTERNAL_SECURITY_CHECKS} STREQUAL ON)
-
 add_definitions (-DWITH_BROKER)
 
 add_executable(mosquitto ${MOSQ_SRCS})
 
 if (NOT WIN32)
-	target_link_libraries(mosquitto ${MOSQ_LIBS})
+	target_link_libraries(mosquitto dl ${MOSQ_LIBS})
 else (NOT WIN32)
 	target_link_libraries(mosquitto ws2_32 ${MOSQ_LIBS})
 endif (NOT WIN32)
 
 install(TARGETS mosquitto RUNTIME DESTINATION ${SBINDIR} LIBRARY DESTINATION ${LIBDIR})
+install(FILES mosquitto_plugin.h DESTINATION ${INCLUDEDIR})
+
+
+if (${WITH_TLS} STREQUAL ON)
+	add_executable(mosquitto_passwd mosquitto_passwd.c)
+	target_link_libraries(mosquitto_passwd ${OPENSSL_LIBRARIES})
+	install(TARGETS mosquitto_passwd RUNTIME DESTINATION ${BINDIR} LIBRARY DESTINATION ${LIBDIR})
+endif (${WITH_TLS} STREQUAL ON)
 
 if (UNIX)
 	install(CODE "EXEC_PROGRAM(/sbin/ldconfig)")

@@ -1,20 +1,22 @@
-CC=cc
-CFLAGS=-I../lib -Wall -ggdb
-LDFLAGS=-L../lib ../lib/libmosquitto.so.0
-INSTALL=install
-prefix=/usr/local
+include ../config.mk
 
-.PHONY: all install uninstall clean
+.PHONY: all install uninstall reallyclean clean
 
 all : mosquitto_pub mosquitto_sub
 
-mosquitto_pub : pub_client.o ../lib/libmosquitto.so.0
-	${CC} $< -o $@ ${LDFLAGS}
+mosquitto_pub : pub_client.o ../lib/libmosquitto.so.${SOVERSION}
+	${CC} $< -o $@ ${CLIENT_LDFLAGS}
 
-mosquitto_sub : sub_client.o ../lib/libmosquitto.so.0
-	${CC} $< -o $@ ${LDFLAGS}
+mosquitto_sub : sub_client.o ../lib/libmosquitto.so.${SOVERSION}
+	${CC} $< -o $@ ${CLIENT_LDFLAGS}
 
-../lib/libmosquitto.so.0 :
+pub_client.o : pub_client.c ../lib/libmosquitto.so.${SOVERSION}
+	${CC} -c $< -o $@ ${CLIENT_CFLAGS}
+
+sub_client.o : sub_client.c ../lib/libmosquitto.so.${SOVERSION}
+	${CC} -c $< -o $@ ${CLIENT_CFLAGS}
+
+../lib/libmosquitto.so.${SOVERSION} :
 	$(MAKE) -C ../lib
 
 install : all
@@ -25,6 +27,8 @@ install : all
 uninstall :
 	-rm -f ${DESTDIR}${prefix}/bin/mosquitto_pub
 	-rm -f ${DESTDIR}${prefix}/bin/mosquitto_sub
+
+reallyclean : clean
 
 clean : 
 	-rm -f *.o mosquitto_pub mosquitto_sub

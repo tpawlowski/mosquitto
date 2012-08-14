@@ -37,7 +37,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <config.h>
 
-#include <mqtt3.h>
+#include <mosquitto_broker.h>
 #include <memory_mosq.h>
 
 struct mosquitto *mqtt3_context_init(int sock)
@@ -47,7 +47,7 @@ struct mosquitto *mqtt3_context_init(int sock)
 	socklen_t addrlen;
 	char address[1024];
 
-	context = _mosquitto_malloc(sizeof(struct mosquitto));
+	context = _mosquitto_calloc(1, sizeof(struct mosquitto));
 	if(!context) return NULL;
 	
 	context->state = mosq_cs_new;
@@ -56,6 +56,7 @@ struct mosquitto *mqtt3_context_init(int sock)
 	context->last_msg_out = time(NULL);
 	context->keepalive = 60; /* Default to 60s */
 	context->clean_session = true;
+	context->disconnect_t = 0;
 	context->id = NULL;
 	context->last_mid = 0;
 	context->will = NULL;
@@ -63,10 +64,15 @@ struct mosquitto *mqtt3_context_init(int sock)
 	context->password = NULL;
 	context->listener = NULL;
 	context->acl_list = NULL;
+	/* is_bridge records whether this client is a bridge or not. This could be
+	 * done by looking at context->bridge for bridges that we create ourself,
+	 * but incoming bridges need some other way of being recorded. */
+	context->is_bridge = false;
 
 	context->in_packet.payload = NULL;
 	_mosquitto_packet_cleanup(&context->in_packet);
 	context->out_packet = NULL;
+	context->current_out_packet = NULL;
 
 	addrlen = sizeof(addr);
 	context->address = NULL;
@@ -88,7 +94,7 @@ struct mosquitto *mqtt3_context_init(int sock)
 	}
 	context->bridge = NULL;
 	context->msgs = NULL;
-#ifdef WITH_SSL
+#ifdef WITH_TLS
 	context->ssl = NULL;
 #endif
 
@@ -124,7 +130,7 @@ void mqtt3_context_cleanup(mosquitto_db *db, struct mosquitto *context, bool do_
 		context->listener = NULL;
 	}
 	if(context->clean_session && db){
-		mqtt3_subs_clean_session(context, &db->subs);
+		mqtt3_subs_clean_session(db, context, &db->subs);
 		mqtt3_db_messages_delete(context);
 	}
 	if(context->address){
@@ -136,6 +142,7 @@ void mqtt3_context_cleanup(mosquitto_db *db, struct mosquitto *context, bool do_
 		context->id = NULL;
 	}
 	_mosquitto_packet_cleanup(&(context->in_packet));
+	_mosquitto_packet_cleanup(context->current_out_packet);
 	while(context->out_packet){
 		_mosquitto_packet_cleanup(context->out_packet);
 		packet = context->out_packet;
@@ -162,11 +169,8 @@ void mqtt3_context_cleanup(mosquitto_db *db, struct mosquitto *context, bool do_
 	}
 }
 
-void mqtt3_context_disconnect(mosquitto_db *db, int context_index)
+void mqtt3_context_disconnect(mosquitto_db *db, struct mosquitto *ctxt)
 {
-	struct mosquitto *ctxt;
-
-	ctxt = db->contexts[context_index];
 	if(ctxt->state != mosq_cs_disconnecting && ctxt->will){
 		/* Unexpected disconnect, queue the client will. */
 		mqtt3_db_messages_easy_queue(db, ctxt, ctxt->will->topic, ctxt->will->qos, ctxt->will->payloadlen, ctxt->will->payload, ctxt->will->retain);
@@ -176,6 +180,7 @@ void mqtt3_context_disconnect(mosquitto_db *db, int context_index)
 		assert(ctxt->listener->client_count >= 0);
 		ctxt->listener = NULL;
 	}
+	ctxt->disconnect_t = time(NULL);
 	_mosquitto_socket_close(ctxt);
 }
 

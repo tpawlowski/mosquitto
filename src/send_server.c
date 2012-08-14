@@ -29,12 +29,12 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <config.h>
 
-#include <mqtt3.h>
+#include <mosquitto_broker.h>
 #include <mqtt3_protocol.h>
 #include <memory_mosq.h>
 #include <util_mosq.h>
 
-int _mosquitto_send_connack(struct mosquitto *context, uint8_t result)
+int _mosquitto_send_connack(struct mosquitto *context, int result)
 {
 	struct _mosquitto_packet *packet = NULL;
 	int rc;
@@ -63,7 +63,7 @@ int _mosquitto_send_connack(struct mosquitto *context, uint8_t result)
 	return _mosquitto_packet_queue(context, packet);
 }
 
-int _mosquitto_send_suback(struct mosquitto *context, uint16_t mid, uint32_t payloadlen, const uint8_t *payload)
+int _mosquitto_send_suback(struct mosquitto *context, uint16_t mid, uint32_t payloadlen, const void *payload)
 {
 	struct _mosquitto_packet *packet = NULL;
 	int rc;

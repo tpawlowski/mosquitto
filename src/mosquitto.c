@@ -45,7 +45,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <tcpd.h>
 #endif
 
-#include <mqtt3.h>
+#include <mosquitto_broker.h>
 #include <memory_mosq.h>
 
 mosquitto_db int_db;
@@ -67,6 +67,11 @@ void handle_sigint(int signal);
 void handle_sigusr1(int signal);
 void handle_sigusr2(int signal);
 
+struct _mosquitto_db *_mosquitto_get_db(void)
+{
+	return &int_db;
+}
+
 /* mosquitto shouldn't run as root.
  * This function will attempt to change to an unprivileged user and group if
  * running as root. The user is given in config->user.
@@ -79,6 +84,7 @@ int drop_privileges(mqtt3_config *config)
 {
 #if !defined(__CYGWIN__) && !defined(WIN32)
 	struct passwd *pwd;
+	char err[256];
 
 	if(geteuid() == 0){
 		if(config->user){
@@ -88,11 +94,13 @@ int drop_privileges(mqtt3_config *config)
 				return 1;
 			}
 			if(setgid(pwd->pw_gid) == -1){
-				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+				strerror_r(errno, err, 256);
+				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 				return 1;
 			}
 			if(setuid(pwd->pw_uid) == -1){
-				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+				strerror_r(errno, err, 256);
+				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 				return 1;
 			}
 		}
@@ -143,6 +151,7 @@ int main(int argc, char *argv[])
 	FILE *pid;
 	int listener_max;
 	int rc;
+	char err[256];
 
 #if defined(WIN32) || defined(__CYGWIN__)
 	if(argc == 2){
@@ -174,7 +183,8 @@ int main(int argc, char *argv[])
 			case 0:
 				break;
 			case -1:
-				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error in fork: %s", strerror(errno));
+				strerror_r(errno, err, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error in fork: %s", err);
 				return 1;
 			default:
 				return MOSQ_ERR_SUCCESS;
@@ -208,16 +218,18 @@ int main(int argc, char *argv[])
 	mqtt3_log_init(config.log_type, config.log_dest);
 	_mosquitto_log_printf(NULL, MOSQ_LOG_INFO, "mosquitto version %s (build date %s) starting", VERSION, TIMESTAMP);
 
-	rc = mosquitto_security_init(&int_db);
+	rc = mosquitto_security_module_init(&int_db);
+	if(rc) return rc;
+	rc = mosquitto_security_init(&int_db, false);
 	if(rc) return rc;
 
 	/* Set static $SYS messages */
 	snprintf(buf, 1024, "mosquitto version %s", VERSION);
-	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/version", 2, strlen(buf), (uint8_t *)buf, 1);
+	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/version", 2, strlen(buf), buf, 1);
 	snprintf(buf, 1024, "%s", TIMESTAMP);
-	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/timestamp", 2, strlen(buf), (uint8_t *)buf, 1);
+	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/timestamp", 2, strlen(buf), buf, 1);
 	snprintf(buf, 1024, "%s", "$Revision$"); // Requires hg keyword extension.
-	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/changeset", 2, strlen(buf), (uint8_t *)buf, 1);
+	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/changeset", 2, strlen(buf), buf, 1);
 
 	listener_max = -1;
 	listensock_index = 0;
@@ -284,7 +296,7 @@ int main(int argc, char *argv[])
 	mqtt3_log_close();
 
 #ifdef WITH_PERSISTENCE
-	if(config.persistence && config.autosave_interval){
+	if(config.persistence){
 		mqtt3_db_backup(&int_db, true, true);
 	}
 #endif
@@ -311,7 +323,7 @@ int main(int argc, char *argv[])
 		_mosquitto_free(listensock);
 	}
 
-	mosquitto_security_cleanup(&int_db);
+	mosquitto_security_module_cleanup(&int_db);
 
 	if(config.pid_file){
 		remove(config.pid_file);
@@ -329,11 +341,12 @@ int __stdcall WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 	char **argv;
 	int argc = 1;
 	char *token;
+	char *saveptr = NULL;
 	int rc;
 
 	argv = _mosquitto_malloc(sizeof(char *)*1);
 	argv[0] = "mosquitto";
-	token = strtok(lpCmdLine, " ");
+	token = strtok_r(lpCmdLine, " ", &saveptr);
 	while(token){
 		argc++;
 		argv = _mosquitto_realloc(argv, sizeof(char *)*argc);
@@ -342,7 +355,7 @@ int __stdcall WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdL
 			return MOSQ_ERR_NOMEM;
 		}
 		argv[argc-1] = token;
-		token = strtok(NULL, " ");
+		token = strtok_r(NULL, " ", &saveptr);
 	}
 	rc = main(argc, argv);
 	_mosquitto_free(argv);

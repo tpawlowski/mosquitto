@@ -31,6 +31,10 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <string.h>
 #include <time.h>
 
+#if defined(WITH_TLS) && defined(WITH_TLS_PSK)
+#include <openssl/ssl.h>
+#endif
+
 #include <mosquitto.h>
 #include <memory_mosq.h>
 #include <net_mosq.h>
@@ -38,7 +42,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <util_mosq.h>
 
 #ifdef WITH_BROKER
-#include <mqtt3.h>
+#include <mosquitto_broker.h>
 #endif
 
 int _mosquitto_packet_alloc(struct _mosquitto_packet *packet)
@@ -78,21 +82,39 @@ int _mosquitto_packet_alloc(struct _mosquitto_packet *packet)
 
 void _mosquitto_check_keepalive(struct mosquitto *mosq)
 {
+	time_t last_msg_out;
+	time_t last_msg_in;
+	time_t now = time(NULL);
+#ifndef WITH_BROKER
+	int rc;
+#endif
+
 	assert(mosq);
 #if defined(WITH_BROKER) && defined(WITH_BRIDGE)
 	/* Check if a lazy bridge should be timed out due to idle. */
 	if(mosq->bridge && mosq->bridge->start_type == bst_lazy
 				&& mosq->sock != INVALID_SOCKET
-				&& time(NULL) - mosq->last_msg_out >= mosq->bridge->idle_timeout){
+				&& now - mosq->last_msg_out >= mosq->bridge->idle_timeout){
 
 		_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE, "Bridge connection %s has exceeded idle timeout, disconnecting.", mosq->id);
 		_mosquitto_socket_close(mosq);
 		return;
 	}
 #endif
-	if(mosq->sock != INVALID_SOCKET && time(NULL) - mosq->last_msg_out >= mosq->keepalive){
-		if(mosq->state == mosq_cs_connected){
+	pthread_mutex_lock(&mosq->msgtime_mutex);
+	last_msg_out = mosq->last_msg_out;
+	last_msg_in = mosq->last_msg_in;
+	pthread_mutex_unlock(&mosq->msgtime_mutex);
+	if(mosq->sock != INVALID_SOCKET &&
+			(now - last_msg_out >= mosq->keepalive || now - last_msg_in >= mosq->keepalive)){
+
+		if(mosq->state == mosq_cs_connected && mosq->ping_t == 0){
 			_mosquitto_send_pingreq(mosq);
+			/* Reset last msg times to give the server time to send a pingresp */
+			pthread_mutex_lock(&mosq->msgtime_mutex);
+			mosq->last_msg_in = now;
+			mosq->last_msg_out = now;
+			pthread_mutex_unlock(&mosq->msgtime_mutex);
 		}else{
 #ifdef WITH_BROKER
 			if(mosq->listener){
@@ -102,6 +124,22 @@ void _mosquitto_check_keepalive(struct mosquitto *mosq)
 			mosq->listener = NULL;
 #endif
 			_mosquitto_socket_close(mosq);
+#ifndef WITH_BROKER
+			pthread_mutex_lock(&mosq->state_mutex);
+			if(mosq->state == mosq_cs_disconnecting){
+				rc = MOSQ_ERR_SUCCESS;
+			}else{
+				rc = 1;
+			}
+			pthread_mutex_unlock(&mosq->state_mutex);
+			pthread_mutex_lock(&mosq->callback_mutex);
+			if(mosq->on_disconnect){
+				mosq->in_callback = true;
+				mosq->on_disconnect(mosq, mosq->obj, rc);
+				mosq->in_callback = false;
+			}
+			pthread_mutex_unlock(&mosq->callback_mutex);
+#endif
 		}
 	}
 }
@@ -118,6 +156,7 @@ int _mosquitto_fix_sub_topic(char **subtopic)
 	assert(subtopic);
 	assert(*subtopic);
 
+	if(strlen(*subtopic) == 0) return MOSQ_ERR_SUCCESS;
 	/* size of fixed here is +1 for the terminating 0 and +1 for the spurious /
 	 * that gets appended. */
 	fixed = _mosquitto_calloc(strlen(*subtopic)+2, 1);
@@ -167,3 +206,109 @@ int _mosquitto_topic_wildcard_len_check(const char *str)
 
 	return MOSQ_ERR_SUCCESS;
 }
+
+/* Does a topic match a subscription? */
+int mosquitto_topic_matches_sub(const char *sub, const char *topic, bool *result)
+{
+	char *local_sub, *local_topic;
+	int slen, tlen;
+	int spos, tpos;
+	int rc;
+	bool multilevel_wildcard = false;
+
+	if(!sub || !topic || !result) return MOSQ_ERR_INVAL;
+
+	local_sub = _mosquitto_strdup(sub);
+	if(!local_sub) return MOSQ_ERR_NOMEM;
+	rc = _mosquitto_fix_sub_topic(&local_sub);
+	if(rc){
+		_mosquitto_free(local_sub);
+		return rc;
+	}
+
+	local_topic = _mosquitto_strdup(topic);
+	if(!local_topic){
+		_mosquitto_free(local_sub);
+		return MOSQ_ERR_NOMEM;
+	}
+	rc = _mosquitto_fix_sub_topic(&local_topic);
+	if(rc){
+		_mosquitto_free(local_sub);
+		_mosquitto_free(local_topic);
+		return rc;
+	}
+
+	slen = strlen(local_sub);
+	tlen = strlen(local_topic);
+
+	spos = 0;
+	tpos = 0;
+
+	while(spos < slen && tpos < tlen){
+		if(local_sub[spos] == local_topic[tpos]){
+			spos++;
+			tpos++;
+			if(spos == slen && tpos == tlen){
+				*result = true;
+				break;
+			}
+		}else{
+			if(local_sub[spos] == '+'){
+				spos++;
+				while(tpos < tlen && local_topic[tpos] != '/'){
+					tpos++;
+				}
+			}else if(local_sub[spos] == '#'){
+				multilevel_wildcard = true;
+				if(spos+1 != slen){
+					*result = false;
+					break;
+				}else{
+					*result = true;
+					break;
+				}
+			}else{
+				*result = false;
+				break;
+			}
+		}
+		if(tpos == tlen-1){
+			/* Check for e.g. foo matching foo/# */
+			if(spos == slen-3 
+					&& local_sub[spos+1] == '/'
+					&& local_sub[spos+2] == '#'){
+				*result = true;
+				multilevel_wildcard = true;
+				break;
+			}
+		}
+	}
+	if(multilevel_wildcard == false && (tpos < tlen || spos < slen)){
+		*result = false;
+	}
+
+	_mosquitto_free(local_sub);
+	_mosquitto_free(local_topic);
+	return MOSQ_ERR_SUCCESS;
+}
+
+#if defined(WITH_TLS) && defined(WITH_TLS_PSK)
+int _mosquitto_hex2bin(const char *hex, unsigned char *bin, int bin_max_len)
+{
+	BIGNUM *bn = NULL;
+	int len;
+
+	if(BN_hex2bn(&bn, hex) == 0){
+		if(bn) BN_free(bn);
+		return 0;
+	}
+	if(BN_num_bytes(bn) > bin_max_len){
+		BN_free(bn);
+		return 0;
+	}
+
+	len = BN_bn2bin(bn, bin);
+	BN_free(bn);
+	return len;
+}
+#endif

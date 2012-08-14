@@ -37,7 +37,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <config.h>
 #endif
 
-#include <mqtt3.h>
+#include <mosquitto_broker.h>
 #include <memory_mosq.h>
 
 extern mosquitto_db int_db;
@@ -198,10 +198,10 @@ int _mosquitto_log_printf(struct mosquitto *mosq, int priority, const char *fmt,
 					return MOSQ_ERR_NOMEM;
 				}
 				snprintf(st, len, "%d: %s", (int)now, s);
-				mqtt3_db_messages_easy_queue(&int_db, NULL, topic, 2, strlen(st), (uint8_t *)st, 0);
+				mqtt3_db_messages_easy_queue(&int_db, NULL, topic, 2, strlen(st), st, 0);
 				_mosquitto_free(st);
 			}else{
-				mqtt3_db_messages_easy_queue(&int_db, NULL, topic, 2, strlen(s), (uint8_t *)s, 0);
+				mqtt3_db_messages_easy_queue(&int_db, NULL, topic, 2, strlen(s), s, 0);
 			}
 		}
 		_mosquitto_free(s);

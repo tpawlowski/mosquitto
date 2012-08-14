@@ -3,8 +3,8 @@ Mosquitto
 
 Mosquitto is an open source implementation of a server for version 3.1 of the
 mqtt protocol. IBM have a closed source version of this server, known as
-Really Small Message Broker (rsmb). The plan is to make this a more or less
-drop in replacement.
+Really Small Message Broker (rsmb). Mosquitto is largely a drop in replacement
+with more features.
 
 See the following links for more information on mqtt:
 
@@ -17,4 +17,13 @@ http://mosquitto.org/ (main homepage)
 http://launchpad.net/mosquitto (bug tracking, translations)
 http://bitbucket.org/oojah/mosquitto (hg source code repository)
 
+There is also a public test server available at http://test.mosquitto.org/
+
 Mosquitto was written by Roger Light <roger@atchoo.org>
+
+
+This product includes software developed by the OpenSSL Project for use in the
+OpenSSL Toolkit. (http://www.openssl.org/)
+This product includes cryptographic software written by Eric Young
+(eay@cryptsoft.com)
+This product includes software written by Tim Hudson (tjh@cryptsoft.com)

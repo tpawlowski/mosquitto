@@ -27,24 +27,23 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
 #include <config.h>
 
-#include <mqtt3.h>
+#include <mosquitto_broker.h>
 #include <mqtt3_protocol.h>
 #include <memory_mosq.h>
 #include <read_handle.h>
 #include <send_mosq.h>
 #include <util_mosq.h>
 
-int mqtt3_packet_handle(mosquitto_db *db, int context_index)
-{
-	struct mosquitto *context;
+extern uint64_t g_pub_bytes_received;
 
-	if(context_index < 0 || context_index >= db->context_count) return MOSQ_ERR_INVAL;
-	context = db->contexts[context_index];
+int mqtt3_packet_handle(mosquitto_db *db, struct mosquitto *context)
+{
 	if(!context) return MOSQ_ERR_INVAL;
 
 	switch((context->in_packet.command)&0xF0){
@@ -63,9 +62,9 @@ int mqtt3_packet_handle(mosquitto_db *db, int context_index)
 		case PUBREL:
 			return _mosquitto_handle_pubrel(db, context);
 		case CONNECT:
-			return mqtt3_handle_connect(db, context_index);
+			return mqtt3_handle_connect(db, context);
 		case DISCONNECT:
-			return mqtt3_handle_disconnect(db, context_index);
+			return mqtt3_handle_disconnect(db, context);
 		case SUBSCRIBE:
 			return mqtt3_handle_subscribe(db, context);
 		case UNSUBSCRIBE:
@@ -87,7 +86,8 @@ int mqtt3_packet_handle(mosquitto_db *db, int context_index)
 int mqtt3_handle_publish(mosquitto_db *db, struct mosquitto *context)
 {
 	char *topic;
-	uint8_t *payload = NULL;
+	char *topic_temp;
+	void *payload = NULL;
 	uint32_t payloadlen;
 	uint8_t dup, qos, retain;
 	uint16_t mid = 0;
@@ -97,16 +97,78 @@ int mqtt3_handle_publish(mosquitto_db *db, struct mosquitto *context)
 	struct mosquitto_msg_store *stored = NULL;
 	int len;
 	char *topic_mount;
+	int i;
+	struct _mqtt3_bridge_topic *cur_topic;
+	bool match;
 
 	dup = (header & 0x08)>>3;
 	qos = (header & 0x06)>>1;
 	retain = (header & 0x01);
 
 	if(_mosquitto_read_string(&context->in_packet, &topic)) return 1;
-	if(_mosquitto_fix_sub_topic(&topic)) return 1;
-	if(!strlen(topic)){
+	if(strlen(topic) == 0){
+#ifdef WITH_STRICT_PROTOCOL
+		/* Invalid publish topic, disconnect client. */
+		_mosquitto_free(topic);
+		return 1;
+#else
+		/* Invalid publish topic, just swallow it. */
+		_mosquitto_free(topic);
+		return 0;
+#endif
+	}
+	if(_mosquitto_fix_sub_topic(&topic)){
+		_mosquitto_free(topic);
 		return 1;
 	}
+	if(!strlen(topic)){
+		_mosquitto_free(topic);
+		return 1;
+	}
+#ifdef WITH_BRIDGE
+	if(context->bridge && context->bridge->topics && context->bridge->topic_remapping){
+		for(i=0; i<context->bridge->topic_count; i++){
+			cur_topic = &context->bridge->topics[i];
+			if(cur_topic->remote_prefix || cur_topic->local_prefix){
+				/* Topic mapping required on this topic if the message matches */
+
+				rc = mosquitto_topic_matches_sub(cur_topic->remote_topic, topic, &match);
+				if(rc){
+					_mosquitto_free(topic);
+					return rc;
+				}
+				if(match){
+					if(cur_topic->remote_prefix){
+						/* This prefix needs removing. */
+						if(!strncmp(cur_topic->remote_prefix, topic, strlen(cur_topic->remote_prefix))){
+							topic_temp = _mosquitto_strdup(topic+strlen(cur_topic->remote_prefix));
+							if(!topic_temp){
+								_mosquitto_free(topic);
+								return MOSQ_ERR_NOMEM;
+							}
+							_mosquitto_free(topic);
+							topic = topic_temp;
+						}
+					}
+
+					if(cur_topic->local_prefix){
+						/* This prefix needs adding. */
+						len = strlen(topic) + strlen(cur_topic->local_prefix)+1;
+						topic_temp = _mosquitto_calloc(len+1, sizeof(char));
+						if(!topic_temp){
+							_mosquitto_free(topic);
+							return MOSQ_ERR_NOMEM;
+						}
+						snprintf(topic_temp, len, "%s%s", cur_topic->local_prefix, topic);
+						_mosquitto_free(topic);
+						topic = topic_temp;
+					}
+					break;
+				}
+			}
+		}
+	}
+#endif
 	if(_mosquitto_topic_wildcard_len_check(topic) != MOSQ_ERR_SUCCESS){
 		/* Invalid publish topic, just swallow it. */
 		_mosquitto_free(topic);
@@ -121,6 +183,7 @@ int mqtt3_handle_publish(mosquitto_db *db, struct mosquitto *context)
 	}
 
 	payloadlen = context->in_packet.remaining_length - context->in_packet.pos;
+	g_pub_bytes_received += payloadlen;
 	if(context->listener && context->listener->mount_point){
 		len = strlen(context->listener->mount_point) + strlen(topic) + 1;
 		topic_mount = _mosquitto_calloc(len, sizeof(char));
@@ -181,6 +244,8 @@ int mqtt3_handle_publish(mosquitto_db *db, struct mosquitto *context)
 			}else{
 				res = 0;
 			}
+			/* mqtt3_db_message_insert() returns 2 to indicate dropped message
+			 * due to queue. This isn't an error so don't disconnect them. */
 			if(!res){
 				if(_mosquitto_send_pubrec(context, mid)) rc = 1;
 			}else if(res == 1){

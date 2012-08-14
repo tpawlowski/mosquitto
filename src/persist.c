@@ -41,9 +41,12 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <string.h>
 #include <sys/stat.h>
 
+#include <mosquitto_broker.h>
 #include <memory_mosq.h>
-#include <mqtt3.h>
 #include <persist.h>
+
+static uint32_t db_version;
+
 
 static int _db_restore_sub(mosquitto_db *db, const char *client_id, const char *sub, int qos);
 
@@ -161,6 +164,11 @@ static int mqtt3_db_message_store_write(mosquitto_db *db, FILE *db_fptr)
 
 	stored = db->msg_store;
 	while(stored){
+		if(!strncmp(stored->msg.topic, "$SYS", 4)){
+			/* Don't save $SYS messages. */
+			stored = stored->next;
+			continue;
+		}
 		length = htonl(sizeof(dbid_t) + 2+strlen(stored->source_id) +
 				sizeof(uint16_t) + sizeof(uint16_t) +
 				2+strlen(stored->msg.topic) + sizeof(uint32_t) +
@@ -225,7 +233,7 @@ static int mqtt3_db_client_write(mosquitto_db *db, FILE *db_fptr)
 	for(i=0; i<db->context_count; i++){
 		context = db->contexts[i];
 		if(context && context->clean_session == false){
-			length = htonl(2+strlen(context->id) + sizeof(uint16_t));
+			length = htonl(2+strlen(context->id) + sizeof(uint16_t) + sizeof(time_t));
 
 			i16temp = htons(DB_CHUNK_CLIENT);
 			write_e(db_fptr, &i16temp, sizeof(uint16_t));
@@ -237,6 +245,7 @@ static int mqtt3_db_client_write(mosquitto_db *db, FILE *db_fptr)
 			write_e(db_fptr, context->id, slen);
 			i16temp = htons(context->last_mid);
 			write_e(db_fptr, &i16temp, sizeof(uint16_t));
+			write_e(db_fptr, &(context->disconnect_t), sizeof(time_t));
 
 			if(mqtt3_db_client_messages_write(db, db_fptr, context)) return 1;
 		}
@@ -291,14 +300,17 @@ static int _db_subs_retain_write(mosquitto_db *db, FILE *db_fptr, struct _mosqui
 		sub = sub->next;
 	}
 	if(node->retained){
-		length = htonl(sizeof(dbid_t));
+		if(strncmp(node->retained->msg.topic, "$SYS", 4)){
+			/* Don't save $SYS messages. */
+			length = htonl(sizeof(dbid_t));
 
-		i16temp = htons(DB_CHUNK_RETAIN);
-		write_e(db_fptr, &i16temp, sizeof(uint16_t));
-		write_e(db_fptr, &length, sizeof(uint32_t));
+			i16temp = htons(DB_CHUNK_RETAIN);
+			write_e(db_fptr, &i16temp, sizeof(uint16_t));
+			write_e(db_fptr, &length, sizeof(uint32_t));
 
-		i64temp = node->retained->db_id;
-		write_e(db_fptr, &i64temp, sizeof(dbid_t));
+			i64temp = node->retained->db_id;
+			write_e(db_fptr, &i64temp, sizeof(dbid_t));
+		}
 	}
 
 	subhier = node->children;
@@ -336,6 +348,7 @@ int mqtt3_db_backup(mosquitto_db *db, bool cleanup, bool shutdown)
 	uint32_t i32temp;
 	uint16_t i16temp;
 	uint8_t i8temp;
+	char err[256];
 
 	if(!db || !db->config || !db->config->persistence_filepath) return MOSQ_ERR_INVAL;
 	_mosquitto_log_printf(NULL, MOSQ_LOG_INFO, "Saving in-memory database to %s.", db->config->persistence_filepath);
@@ -378,7 +391,8 @@ int mqtt3_db_backup(mosquitto_db *db, bool cleanup, bool shutdown)
 	fclose(db_fptr);
 	return rc;
 error:
-	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+	strerror_r(errno, err, 256);
+	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 	if(db_fptr) fclose(db_fptr);
 	return 1;
 }
@@ -443,6 +457,7 @@ static int _db_client_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 	char *client_id = NULL;
 	int rc = 0;
 	struct mosquitto *context;
+	time_t disconnect_t;
 
 	read_e(db_fptr, &i16temp, sizeof(uint16_t));
 	slen = ntohs(i16temp);
@@ -462,8 +477,16 @@ static int _db_client_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 	read_e(db_fptr, &i16temp, sizeof(uint16_t));
 	last_mid = ntohs(i16temp);
 
+	if(db_version == 2){
+		disconnect_t = time(NULL);
+	}else{
+		read_e(db_fptr, &disconnect_t, sizeof(time_t));
+	}
+
 	context = _db_find_or_add_context(db, client_id, last_mid);
 	if(!context) rc = 1;
+
+	context->disconnect_t = disconnect_t;
 
 	_mosquitto_free(client_id);
 
@@ -482,6 +505,7 @@ static int _db_client_msg_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 	uint8_t qos, retain, direction, state, dup;
 	char *client_id = NULL;
 	int rc;
+	char err[256];
 
 	read_e(db_fptr, &i16temp, sizeof(uint16_t));
 	slen = ntohs(i16temp);
@@ -515,7 +539,8 @@ static int _db_client_msg_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 
 	return rc;
 error:
-	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+	strerror_r(errno, err, 256);
+	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 	if(db_fptr) fclose(db_fptr);
 	if(client_id) _mosquitto_free(client_id);
 	return 1;
@@ -525,12 +550,13 @@ static int _db_msg_store_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 {
 	dbid_t i64temp, store_id;
 	uint32_t i32temp, payloadlen;
-	uint16_t i16temp, slen, source_mid, mid;
+	uint16_t i16temp, slen, source_mid;
 	uint8_t qos, retain, *payload = NULL;
 	char *source_id = NULL;
 	char *topic = NULL;
 	int rc = 0;
 	struct mosquitto_msg_store *stored = NULL;
+	char err[256];
 
 	read_e(db_fptr, &i64temp, sizeof(dbid_t));
 	store_id = i64temp;
@@ -545,7 +571,8 @@ static int _db_msg_store_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 			return MOSQ_ERR_NOMEM;
 		}
 		if(fread(source_id, 1, slen, db_fptr) != slen){
-			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+			strerror_r(errno, err, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 			fclose(db_fptr);
 			_mosquitto_free(source_id);
 			return 1;
@@ -554,8 +581,8 @@ static int _db_msg_store_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 	read_e(db_fptr, &i16temp, sizeof(uint16_t));
 	source_mid = ntohs(i16temp);
 
+	/* This is the mid - don't need it */
 	read_e(db_fptr, &i16temp, sizeof(uint16_t));
-	mid = ntohs(i16temp);
 
 	read_e(db_fptr, &i16temp, sizeof(uint16_t));
 	slen = ntohs(i16temp);
@@ -568,7 +595,8 @@ static int _db_msg_store_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 			return MOSQ_ERR_NOMEM;
 		}
 		if(fread(topic, 1, slen, db_fptr) != slen){
-			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+			strerror_r(errno, err, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 			fclose(db_fptr);
 			_mosquitto_free(source_id);
 			_mosquitto_free(topic);
@@ -596,7 +624,8 @@ static int _db_msg_store_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 			return MOSQ_ERR_NOMEM;
 		}
 		if(fread(payload, 1, payloadlen, db_fptr) != payloadlen){
-			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+			strerror_r(errno, err, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 			fclose(db_fptr);
 			_mosquitto_free(source_id);
 			_mosquitto_free(topic);
@@ -612,7 +641,8 @@ static int _db_msg_store_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 
 	return rc;
 error:
-	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+	strerror_r(errno, err, 256);
+	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 	if(db_fptr) fclose(db_fptr);
 	if(source_id) _mosquitto_free(source_id);
 	if(topic) _mosquitto_free(topic);
@@ -623,9 +653,11 @@ static int _db_retain_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 {
 	dbid_t i64temp, store_id;
 	struct mosquitto_msg_store *store;
+	char err[256];
 
-	if(fread(&i64temp, 1, sizeof(dbid_t), db_fptr) != sizeof(dbid_t)){
-		_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+	if(fread(&i64temp, sizeof(dbid_t), 1, db_fptr) != 1){
+		strerror_r(errno, err, 256);
+		_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 		fclose(db_fptr);
 		return 1;
 	}
@@ -648,6 +680,7 @@ static int _db_sub_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 	char *client_id;
 	char *topic;
 	int rc = 0;
+	char err[256];
 
 	read_e(db_fptr, &i16temp, sizeof(uint16_t));
 	slen = ntohs(i16temp);
@@ -677,7 +710,8 @@ static int _db_sub_chunk_restore(mosquitto_db *db, FILE *db_fptr)
 
 	return rc;
 error:
-	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+	strerror_r(errno, err, 256);
+	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 	if(db_fptr) fclose(db_fptr);
 	return 1;
 }
@@ -687,12 +721,13 @@ int mqtt3_db_restore(mosquitto_db *db)
 	FILE *fptr;
 	char header[15];
 	int rc = 0;
-	uint32_t crc, db_version;
+	uint32_t crc;
 	dbid_t i64temp;
 	uint32_t i32temp, length;
 	uint16_t i16temp, chunk;
 	uint8_t i8temp;
 	ssize_t rlen;
+	char err[256];
 
 	assert(db);
 	assert(db->config);
@@ -710,12 +745,16 @@ int mqtt3_db_restore(mosquitto_db *db)
 		 * Is your DB change still compatible with previous versions?
 		 */
 		if(db_version > MOSQ_DB_VERSION && db_version != 0){
-			fclose(fptr);
-			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unsupported persistent database format version %d (need version %d).", db_version, MOSQ_DB_VERSION);
-			return 1;
+			if(db_version == 2){
+				/* Addition of disconnect_t to client chunk in v3. */
+			}else{
+				fclose(fptr);
+				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unsupported persistent database format version %d (need version %d).", db_version, MOSQ_DB_VERSION);
+				return 1;
+			}
 		}
 
-		while(rlen = fread(&i16temp, 1, sizeof(uint16_t), fptr), rlen == sizeof(uint16_t)){
+		while(rlen = fread(&i16temp, sizeof(uint16_t), 1, fptr), rlen == 1){
 			chunk = ntohs(i16temp);
 			read_e(fptr, &i32temp, sizeof(uint32_t));
 			length = ntohl(i32temp);
@@ -724,8 +763,8 @@ int mqtt3_db_restore(mosquitto_db *db)
 					read_e(fptr, &i8temp, sizeof(uint8_t)); // shutdown
 					read_e(fptr, &i8temp, sizeof(uint8_t)); // sizeof(dbid_t)
 					if(i8temp != sizeof(dbid_t)){
-						_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Incompatible database configuration (dbid size is %d bytes, expected %d)",
-								i8temp, sizeof(dbid_t));
+						_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Incompatible database configuration (dbid size is %d bytes, expected %lu)",
+								i8temp, (unsigned long)sizeof(dbid_t));
 						fclose(fptr);
 						return 1;
 					}
@@ -769,7 +808,8 @@ int mqtt3_db_restore(mosquitto_db *db)
 
 	return rc;
 error:
-	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", strerror(errno));
+	strerror_r(errno, err, 256);
+	_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
 	if(fptr) fclose(fptr);
 	return 1;
 }
@@ -784,7 +824,7 @@ static int _db_restore_sub(mosquitto_db *db, const char *client_id, const char *
 
 	context = _db_find_or_add_context(db, client_id, 0);
 	if(!context) return 1;
-	return mqtt3_sub_add(context, sub, qos, &db->subs);
+	return mqtt3_sub_add(db, context, sub, qos, &db->subs);
 }
 
 #endif
