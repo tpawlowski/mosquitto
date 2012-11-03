@@ -66,7 +66,7 @@ WITH_MEMORY_TRACKING:=yes
 
 # Also bump lib/mosquitto.h, lib/python/setup.py, CMakeLists.txt,
 # installer/mosquitto.nsi, installer/mosquitto-cygwin.nsi
-VERSION=1.0.4
+VERSION=1.0.5
 TIMESTAMP:=$(shell date "+%F %T%z")
 
 # Client library SO version. Bump if incompatible API/ABI changes are made.
@@ -96,7 +96,11 @@ LIB_CXXFLAGS:=$(LIB_CFLAGS)
 BROKER_CFLAGS:=${LIB_CFLAGS} -DVERSION="\"${VERSION}\"" -DTIMESTAMP="\"${TIMESTAMP}\"" -DWITH_BROKER
 CLIENT_CFLAGS:=${CFLAGS} -I../lib
 
-BROKER_LIBS:=-ldl
+ifeq ($(UNAME),FreeBSD)
+	BROKER_LIBS:=
+else
+	BROKER_LIBS:=-ldl
+endif
 LIB_LIBS:=
 PASSWD_LIBS:=
 
