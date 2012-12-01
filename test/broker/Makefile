@@ -32,6 +32,7 @@ test : test-compile
 	./03-publish-c2b-timeout-qos2.py
 	./03-publish-b2c-timeout-qos2.py
 	./03-publish-b2c-disconnect-qos2.py
+	./03-pattern-matching.py
 	./04-retain-qos0.py
 	./04-retain-qos0-fresh.py
 	./04-retain-qos0-repeated.py
@@ -51,6 +52,8 @@ test : test-compile
 	./08-ssl-connect-cert-auth-without.py
 	./08-ssl-connect-cert-auth-expired.py
 	./08-ssl-connect-cert-auth-revoked.py
+	./08-ssl-connect-identity.py
+	./08-ssl-connect-no-identity.py
 	./08-tls-psk-pub.py
 	./08-tls-psk-bridge.py
 	./09-plugin-auth-unpwd-success.py

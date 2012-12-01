@@ -14,6 +14,12 @@ Broker:
 - Add allow_duplicate_messages option.
 - ACL files can now have comment lines with # as the first character.
 - Display message on startup about which config is being loaded.
+- Fix max_inflight_messages and max_queued_messages not being applied.
+- Fix documentation error in mosquitto.conf.
+- Ensure that QoS 2 queued messages are sent out in a timely manner.
+- Local bridges now act on clean_session correctly.
+- Local bridges with clean_session==false now remove unused subscriptions on
+  broker restart.
 
 Client library:
 - Free memory used by OpenSSL in mosquitto_lib_cleanup() where possible.
@@ -28,14 +34,75 @@ Client library:
   immediately if the CA certificate or client certificate/key cannot be
   accessed.
 - Fix potential memory leaks on connection failures.
+- Don't produce return error from mosquitto_loop() if a system call is
+  interrupted. This prevents disconnects/reconnects in threaded mode and
+  simplifies non-threaded client handling.
+- Ignore SIGPIPE to prevent unnecessary client quits in threaded mode.
+- Fix document error for mosquitto_message_retry_set().
 
 Clients:
 - Clients now display their own version number and library version number in
   their help messages.
+- Fix "mosquitto_pub -l -q 2" disconnecting before all messages were
+  transmitted.
+- Fix potential out-of-bounds array access with client ids. Fixes bug
+  #1083182.
 
 Other:
 - mosquitto_passwd can now convert password files with plain text files to
   hashed versions.
+
+1.0.5 - 20121103
+================
+
+Broker:
+- Fix crash when the broker has use_identity_as_username set to true but a
+  client connects without a certificate.
+- mosquitto_passwd should only be installed if WITH_TLS=yes.
+
+Library:
+- Use symbolic errno values rather than numbers in Python module to avoid
+  cross platform issues (incorrect errno on Mac OS).
+
+Other:
+- Build script fixes for FreeBSD.
+
+1.0.4 - 20121017
+================
+
+Broker:
+- Deal with poll() POLLIN/POLLOUT before POLL[RD]HUP to correctly handle the
+  case where a client sends data and immediately closes its socket.
+
+Library:
+- Fix memory leak with messages of QoS=2. Fixes bug #1064981.
+- Fix potential thread synchronisation problem with outgoing packets in the
+  Python module. Fixes bug #1064977.
+
+Clients:
+- Fix "mosquitto_sub -l" incorrectly only sending one message per second.
+
+1.0.3 - 20120927
+================
+
+Broker:
+- Fix loading of psk files.
+- Don't return an error when reloading config if an ACL file isn't defined.
+  This was preventing psk files being reloaded.
+- Clarify meaning of $SYS/broker/clients/total in mosquitto(8) man page.
+- Clarify meaning of $SYS/broker/messages/stored in mosquitto(8) man page.
+- Fix non-retained message delivery when subscribing to #.
+- Fix retained message delivery for subs to foo/# with retained messages at
+  foo.
+- Include the filename in password/acl file loading errors.
+
+Library:
+- Fix possible AttributeError when self._sock == None in Python module.
+- Fix reconnecting after a timeout in Python module.
+- Fix reconnecting when there were outgoing packets in the queue in the Python
+  module.
+- Fix problem with mutex initialisation causing crashes on some Windows
+  installations.
 
 1.0.2 - 20120919
 ================

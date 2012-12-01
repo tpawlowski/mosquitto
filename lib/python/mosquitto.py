@@ -29,6 +29,7 @@
 This is an MQTT v3.1 client module. MQTT is a lightweight pub/sub messaging
 protocol that is easy to implement and suitable for low powered devices.
 """
+import errno
 import random
 import select
 import socket
@@ -395,6 +396,7 @@ class Mosquitto:
         self._password = ""
         self._in_packet = MosquittoInPacket()
         self._out_packet = []
+        self._current_out_packet = None
         self._last_msg_in = time.time()
         self._last_msg_out = time.time()
         self._ping_t = 0
@@ -563,6 +565,21 @@ class Mosquitto:
         if self._port <= 0:
             raise ValueError('Invalid port number.')
 
+        self._in_packet.cleanup()
+        self._out_packet_mutex.acquire()
+        self._out_packet = []
+        self._out_packet_mutex.release()
+
+        self._current_out_packet_mutex.acquire()
+        self._current_out_packet = None
+        self._current_out_packet_mutex.release()
+
+        self._msgtime_mutex.acquire()
+        self._last_msg_in = time.time()
+        self._last_msg_out = time.time()
+        self._msgtime_mutex.release()
+
+        self._ping_t = 0
         self._state_mutex.acquire()
         self._state = mosq_cs_new
         self._state_mutex.release()
@@ -594,7 +611,7 @@ class Mosquitto:
             self.socket().connect((self._host, self._port))
         except socket.error as err:
             (msg) = err
-            if msg.errno != 115:
+            if msg.errno != errno.EINPROGRESS:
                 print(msg)
                 return 1
 
@@ -622,10 +639,17 @@ class Mosquitto:
         if max_packets < 1:
             raise ValueError('Invalid max_packets.')
 
-        if len(self._out_packet) > 0:
+        self._current_out_packet_mutex.acquire()
+        self._out_packet_mutex.acquire()
+        if self._current_out_packet == None and len(self._out_packet) > 0:
+            self._current_out_packet = self._out_packet.pop(0)
+
+        if self._current_out_packet:
             wlist = [self.socket()]
         else:
             wlist = []
+        self._out_packet_mutex.release()
+        self._current_out_packet_mutex.release()
 
         rlist = [self.socket()]
         try:
@@ -640,10 +664,10 @@ class Mosquitto:
                 if self._ssl:
                     self._ssl.close()
                     self._ssl = None
-                else:
+                elif self._sock:
                     self._sock.close()
+                    self._sock = None
 
-                self._sock = None
                 self._state_mutex.acquire()
                 if self._state == mosq_cs_disconnecting:
                     rc = MOSQ_ERR_SUCCESS
@@ -665,8 +689,8 @@ class Mosquitto:
                     self._ssl = None
                 else:
                     self._sock.close()
+                    self._sock = None
 
-                self._sock = None
                 self._state_mutex.acquire()
                 if self._state == mosq_cs_disconnecting:
                     rc = MOSQ_ERR_SUCCESS
@@ -874,10 +898,10 @@ class Mosquitto:
         """Call to determine if there is network data waiting to be written.
         Useful if you are calling select() yourself rather than using loop().
         """
-        if self._out_packet == None:
-            return False
-        else:
+        if self._current_out_packet or len(self._out_packet) > 0:
             return True
+        else:
+            return False
 
     def loop_misc(self):
         """Process miscellaneous network events. Use in place of calling loop() if you
@@ -900,9 +924,10 @@ class Mosquitto:
             if self._ssl:
                 self._ssl.close()
                 self._ssl = None
-            else:
+            elif self._sock:
                 self._sock.close()
-            self._sock = None
+                self._sock = None
+
             self._callback_mutex.acquire()
             if self._state == mosq_cs_disconnecting:
                 rc = MOSQ_ERR_SUCCESS
@@ -1060,7 +1085,7 @@ class Mosquitto:
                 (msg) = err
                 if self._ssl and (msg.errno == ssl.SSL_ERROR_WANT_READ or msg.errno == ssl.SSL_ERROR_WANT_WRITE):
                     return MOSQ_ERR_AGAIN
-                if msg.errno == 11:
+                if msg.errno == errno.EAGAIN:
                     return MOSQ_ERR_AGAIN
                 print(msg)
                 return 1
@@ -1084,7 +1109,7 @@ class Mosquitto:
                     (msg) = err
                     if self._ssl and (msg.errno == ssl.SSL_ERROR_WANT_READ or msg.errno == ssl.SSL_ERROR_WANT_WRITE):
                         return MOSQ_ERR_AGAIN
-                    if msg.errno == 11:
+                    if msg.errno == errno.EAGAIN:
                         return MOSQ_ERR_AGAIN
                     print(msg)
                     return 1
@@ -1116,7 +1141,7 @@ class Mosquitto:
                 (msg) = err
                 if self._ssl and (msg.errno == ssl.SSL_ERROR_WANT_READ or msg.errno == ssl.SSL_ERROR_WANT_WRITE):
                     return MOSQ_ERR_AGAIN
-                if msg.errno == 11:
+                if msg.errno == errno.EAGAIN:
                     return MOSQ_ERR_AGAIN
                 print(msg)
                 return 1
@@ -1137,13 +1162,16 @@ class Mosquitto:
         return rc
 
     def _packet_write(self):
-        while len(self._out_packet) > 0:
-            packet = self._out_packet[0]
+        self._current_out_packet_mutex.acquire()
+
+        while self._current_out_packet:
+            packet = self._current_out_packet
 
             if self._ssl:
                 try:
                     write_length = self._ssl.write(packet.packet[packet.pos:])
                 except AttributeError:
+                    self._current_out_packet_mutex.release()
                     return MOSQ_ERR_SUCCESS
             else:
                 write_length = self._sock.send(packet.packet[packet.pos:])
@@ -1161,10 +1189,17 @@ class Mosquitto:
 
                         self._callback_mutex.release()
 
-                    self._out_packet.pop(0)
+                    self._out_packet_mutex.acquire()
+                    if len(self._out_packet) > 0:
+                        self._current_out_packet = self._out_packet.pop(0)
+                    else:
+                        self._current_out_packet = None
+                    self._out_packet_mutex.release()
             else:
                 pass # FIXME
         
+        self._current_out_packet_mutex.release()
+
         self._msgtime_mutex.acquire()
         self._last_msg_out = time.time()
         self._msgtime_mutex.release()
@@ -1188,9 +1223,10 @@ class Mosquitto:
                 if self._ssl:
                     self._ssl.close()
                     self._ssl = None
-                else:
+                elif self._sock:
                     self._sock.close()
-                self._sock = None
+                    self._sock = None
+
                 if self._state == mosq_cs_disconnecting:
                     rc = MOSQ_ERR_SUCCESS
                 else:
@@ -1452,8 +1488,13 @@ class Mosquitto:
 
     def _packet_queue(self, command, packet, mid, qos):
         mpkt = MosquittoPacket(command, packet, mid, qos)
+
         self._out_packet_mutex.acquire()
         self._out_packet.append(mpkt)
+        if self._current_out_packet_mutex.acquire(False) == True:
+            if self._current_out_packet == None and len(self._out_packet) > 0:
+                self._current_out_packet = self._out_packet.pop(0)
+            self._current_out_packet_mutex.release()
         self._out_packet_mutex.release()
 
         if self._in_callback == False:

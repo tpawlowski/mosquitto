@@ -41,8 +41,12 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <ws2tcpip.h>
 #endif
 
+#ifdef __FreeBSD__
+#  include <netinet/in.h>
+#endif
+
 #ifdef __SYMBIAN32__
-#include <netinet.in.h>
+#include <netinet/in.h>
 #endif
 
 #ifdef __QNX__
