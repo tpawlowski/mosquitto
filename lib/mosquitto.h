@@ -57,8 +57,8 @@ extern "C" {
 #endif
 
 #define LIBMOSQUITTO_MAJOR 1
-#define LIBMOSQUITTO_MINOR 0
-#define LIBMOSQUITTO_REVISION 5
+#define LIBMOSQUITTO_MINOR 1
+#define LIBMOSQUITTO_REVISION 0
 #define LIBMOSQUITTO_VERSION_NUMBER (LIBMOSQUITTO_MAJOR*1000000+LIBMOSQUITTO_MINOR*1000+LIBMOSQUITTO_REVISION)
 
 /* Log types */
@@ -531,9 +531,15 @@ libmosq_EXPORT void mosquitto_message_free(struct mosquitto_message **message);
  * Function: mosquitto_loop
  *
  * The main network loop for the client. You must call this frequently in order
- * to keep communications between the client and broker working. An alternative
- * approach is to use <mosquitto_loop_start> to run the client loop in its own
- * thread.
+ * to keep communications between the client and broker working. If incoming
+ * data is present it will then be processed. Outgoing commands, from e.g.
+ * <mosquitto_publish>, are normally sent immediately that their function is
+ * called, but this is not always possible. <mosquitto_loop> will also attempt
+ * to send any remaining outgoing messages, which also includes commands that
+ * are part of the flow for messages with QoS>0.
+ *
+ * An alternative approach is to use <mosquitto_loop_start> to run the client
+ * loop in its own thread.
  *
  * This calls select() to monitor the client network socket. If you want to
  * integrate mosquitto client operation with your own select() call, use
@@ -547,10 +553,7 @@ libmosq_EXPORT void mosquitto_message_free(struct mosquitto_message **message);
  *	timeout -     Maximum number of milliseconds to wait for network activity
  *	              in the select() call before timing out. Set to 0 for instant
  *	              return.  Set negative to use the default of 1000ms.
- *	max_packets - the maximum number of packets to process in this call. Must
- *	              be >0. If set to 1, only a single packet will be processed
- *	              per call. Avoid setting too high if you have a high incoming
- *	              message rate.
+ *	max_packets - this parameter is currently unused.
  * 
  * Returns:
  *	MOSQ_ERR_SUCCESS -   on success.
@@ -565,9 +568,44 @@ libmosq_EXPORT void mosquitto_message_free(struct mosquitto_message **message);
  *                       Use strerror_r() where available or FormatMessage() on
  *                       Windows.
  * See Also:
- *	<mosquitto_loop_start>, <mosquitto_loop_stop>
+ *	<mosquitto_loop_forever>, <mosquitto_loop_start>, <mosquitto_loop_stop>
  */
 libmosq_EXPORT int mosquitto_loop(struct mosquitto *mosq, int timeout, int max_packets);
+
+/*
+ * Function: mosquitto_loop_forever
+ *
+ * This function call loop() for you in an infinite blocking loop. It is useful
+ * for the case where you only want to run the MQTT client loop in your
+ * program.
+ *
+ * It handles reconnecting in case server connection is lost. If you call
+ * mosquitto_disconnect() in a callback it will return.
+ *
+ * Parameters:
+ *  mosq - a valid mosquitto instance.
+ *	timeout -     Maximum number of milliseconds to wait for network activity
+ *	              in the select() call before timing out. Set to 0 for instant
+ *	              return.  Set negative to use the default of 1000ms.
+ *	max_packets - this parameter is currently unused.
+ *
+ * Returns:
+ *	MOSQ_ERR_SUCCESS -   on success.
+ * 	MOSQ_ERR_INVAL -     if the input parameters were invalid.
+ * 	MOSQ_ERR_NOMEM -     if an out of memory condition occurred.
+ * 	MOSQ_ERR_NO_CONN -   if the client isn't connected to a broker.
+ *  MOSQ_ERR_CONN_LOST - if the connection to the broker was lost.
+ *	MOSQ_ERR_PROTOCOL -  if there is a protocol error communicating with the
+ *                       broker.
+ * 	MOSQ_ERR_ERRNO -     if a system call returned an error. The variable errno
+ *                       contains the error code, even on Windows.
+ *                       Use strerror_r() where available or FormatMessage() on
+ *                       Windows.
+ *
+ * See Also:
+ *	<mosquitto_loop>, <mosquitto_loop_start>
+ */
+libmosq_EXPORT int mosquitto_loop_forever(struct mosquitto *mosq, int timeout, int max_packets);
 
 /*
  * Function: mosquitto_loop_start
@@ -585,7 +623,7 @@ libmosq_EXPORT int mosquitto_loop(struct mosquitto *mosq, int timeout, int max_p
  *	MOSQ_ERR_NOT_SUPPORTED - if thread support is not available.
  *
  * See Also:
- *	<mosquitto_connect_async>, <mosquitto_loop>, <mosquitto_loop_stop>
+ *	<mosquitto_connect_async>, <mosquitto_loop>, <mosquitto_loop_forever>, <mosquitto_loop_stop>
  */
 libmosq_EXPORT int mosquitto_loop_start(struct mosquitto *mosq);
 
@@ -636,10 +674,7 @@ libmosq_EXPORT int mosquitto_socket(struct mosquitto *mosq);
  *
  * Parameters:
  *	mosq -        a valid mosquitto instance.
- *	max_packets - the maximum number of packets to process in this call. Must
- *	              be >0. If set to 1, only a single packet will be processed
- *	              per call. Avoid setting too high if you have a high incoming
- *	              message rate.
+ *	max_packets - this parameter is currently unused.
  *
  * Returns:
  *	MOSQ_ERR_SUCCESS -   on success.
@@ -668,9 +703,7 @@ libmosq_EXPORT int mosquitto_loop_read(struct mosquitto *mosq, int max_packets);
  *
  * Parameters:
  *	mosq -        a valid mosquitto instance.
- *	max_packets - the maximum number of packets to process in this call. Must
- *	              be >0. If set to 1, only a single packet will be processed
- *	              per call.
+ *	max_packets - this parameter is currently unused.
  *
  * Returns:
  *	MOSQ_ERR_SUCCESS -   on success.
@@ -990,7 +1023,7 @@ libmosq_EXPORT void mosquitto_log_callback_set(struct mosquitto *mosq, void (*on
  * Parameters:
  *  mosq -          a valid mosquitto instance.
  *  message_retry - the number of seconds to wait for a response before
- *                  retrying. Defaults to 60.
+ *                  retrying. Defaults to 20.
  */
 libmosq_EXPORT void mosquitto_message_retry_set(struct mosquitto *mosq, unsigned int message_retry);
 

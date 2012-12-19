@@ -28,16 +28,6 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <assert.h>
-#ifndef WIN32
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#else
-#include <ws2tcpip.h>
-#endif
-
-#ifdef __FreeBSD__
-#  include <netinet/in.h>
-#endif
 
 #include <config.h>
 
@@ -47,8 +37,6 @@ POSSIBILITY OF SUCH DAMAGE.
 struct mosquitto *mqtt3_context_init(int sock)
 {
 	struct mosquitto *context;
-	struct sockaddr_storage addr;
-	socklen_t addrlen;
 	char address[1024];
 
 	context = _mosquitto_calloc(1, sizeof(struct mosquitto));
@@ -78,18 +66,9 @@ struct mosquitto *mqtt3_context_init(int sock)
 	context->out_packet = NULL;
 	context->current_out_packet = NULL;
 
-	addrlen = sizeof(addr);
 	context->address = NULL;
-	if(!getpeername(sock, (struct sockaddr *)&addr, &addrlen)){
-		if(addr.ss_family == AF_INET){
-			if(inet_ntop(AF_INET, &((struct sockaddr_in *)&addr)->sin_addr.s_addr, address, 1024)){
-				context->address = _mosquitto_strdup(address);
-			}
-		}else if(addr.ss_family == AF_INET6){
-			if(inet_ntop(AF_INET6, &((struct sockaddr_in6 *)&addr)->sin6_addr.s6_addr, address, 1024)){
-				context->address = _mosquitto_strdup(address);
-			}
-		}
+	if(!_mosquitto_socket_get_address(sock, address, 1024)){
+		context->address = _mosquitto_strdup(address);
 	}
 	if(!context->address && sock != -1){
 		/* getpeername and inet_ntop failed and not a bridge */
@@ -111,10 +90,10 @@ struct mosquitto *mqtt3_context_init(int sock)
  * but it will mean that CONNACK messages will never get sent for bad protocol
  * versions for example.
  */
-void mqtt3_context_cleanup(mosquitto_db *db, struct mosquitto *context, bool do_free)
+void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, bool do_free)
 {
 	struct _mosquitto_packet *packet;
-	mosquitto_client_msg *msg, *next;
+	struct mosquitto_client_msg *msg, *next;
 	if(!context) return;
 
 	if(context->username){
@@ -173,7 +152,7 @@ void mqtt3_context_cleanup(mosquitto_db *db, struct mosquitto *context, bool do_
 	}
 }
 
-void mqtt3_context_disconnect(mosquitto_db *db, struct mosquitto *ctxt)
+void mqtt3_context_disconnect(struct mosquitto_db *db, struct mosquitto *ctxt)
 {
 	if(ctxt->state != mosq_cs_disconnecting && ctxt->will){
 		/* Unexpected disconnect, queue the client will. */

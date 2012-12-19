@@ -1,8 +1,13 @@
 import struct
 
-def check_received_packet(sock, name, expected):
-    received = sock.recv(len(expected))
-    return packet_matches(name, received, expected)
+def expect_packet(sock, name, expected):
+    if len(expected) > 0:
+        rlen = len(expected)
+    else:
+        rlen = 1
+
+    packet_recvd = sock.recv(rlen)
+    return packet_matches(name, packet_recvd, expected)
 
 def packet_matches(name, recvd, expected):
     if recvd != expected:
@@ -197,7 +202,10 @@ def to_string(packet):
         return "0xF0"
 
 def gen_connect(client_id, clean_session=True, keepalive=60, username=None, password=None, will_topic=None, will_qos=0, will_retain=False, will_payload="", proto_ver=3):
-    remaining_length = 12 + 2+len(client_id)
+    if client_id == None:
+        remaining_length = 12
+    else:
+        remaining_length = 12 + 2+len(client_id)
     connect_flags = 0
     if clean_session:
         connect_flags = connect_flags | 0x02
@@ -218,7 +226,8 @@ def gen_connect(client_id, clean_session=True, keepalive=60, username=None, pass
     rl = pack_remaining_length(remaining_length)
     packet = struct.pack("!B"+str(len(rl))+"s", 0x10, rl)
     packet = packet + struct.pack("!H6sBBH", len("MQIsdp"), "MQIsdp", proto_ver, connect_flags, keepalive)
-    packet = packet + struct.pack("!H"+str(len(client_id))+"s", len(client_id), client_id)
+    if client_id != None:
+        packet = packet + struct.pack("!H"+str(len(client_id))+"s", len(client_id), client_id)
 
     if will_topic != None:
         packet = packet + struct.pack("!H"+str(len(will_topic))+"s", len(will_topic), will_topic)

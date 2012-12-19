@@ -123,7 +123,7 @@ def _fix_sub_topic(subtopic):
 
 def error_string(mosq_errno):
     """Return the error string associated with a mosquitto error number."""
-    if mosq_errno == MOSQ_ERR_SUCESS:
+    if mosq_errno == MOSQ_ERR_SUCCESS:
         return "No error."
     elif mosq_errno == MOSQ_ERR_NOMEM:
         return "Out of memory."
@@ -201,6 +201,9 @@ def topic_matches_sub(sub, topic):
                 spos += 1
                 while tpos < tlen and local_topic[tpos] != '/':
                     tpos += 1
+                if tpos == tlen and spos == slen:
+                    result = True
+                    break
 
             elif local_sub[spos] == '#':
                 multilevel_wildcard = True
@@ -286,6 +289,8 @@ class Mosquitto:
     * Use connect()/connect_async() to connect to a broker
     * Call loop() frequently to maintain network traffic flow with the broker
     * Or use loop_start() to set a thread running to call loop() for you.
+    * Or use loop_forever() to handle calling loop() for you in a blocking
+    * function.
     * Use subscribe() to subscribe to a topic and receive messages
     * Use publish() to send messages
     * Use disconnect() to disconnect from the broker
@@ -300,19 +305,19 @@ class Mosquitto:
     broker. To use a callback, define a function and then assign it to the
     client:
     
-    def on_connect(mosq, obj, rc):
+    def on_connect(mosq, userdata, rc):
         print("Connection returned " + str(rc))
 
     client.on_connect = on_connect
 
-    All of the callbacks as described below have a "mosq" and an "obj"
+    All of the callbacks as described below have a "mosq" and an "userdata"
     argument. "mosq" is the Mosquitto instance that is calling the callback.
-    "obj" is user data of any type and can be set when creating a new client
-    instance or with user_data_set(obj).
+    "userdata" is user data of any type and can be set when creating a new client
+    instance or with user_data_set(userdata).
     
     The callbacks:
 
-    on_connect(mosq, obj, rc): called when the broker responds to our connection
+    on_connect(mosq, userdata, rc): called when the broker responds to our connection
       request. The value of rc determines success or not:
       0: Connection successful
       1: Connection refused - incorrect protocol version
@@ -322,17 +327,17 @@ class Mosquitto:
       5: Connection refused - not authorised
       6-255: Currently unused.
 
-    on_disconnect(mosq, obj, rc): called when the client disconnects from the broker.
+    on_disconnect(mosq, userdata, rc): called when the client disconnects from the broker.
       The rc parameter indicates the disconnection state. If MOSQ_ERR_SUCCESS
       (0), the callback was called in response to a disconnect() call. If any
       other value the disconnection was unexpected, such as might be caused by
       a network error.
 
-    on_message(mosq, obj, message): called when a message has been received on a
+    on_message(mosq, userdata, message): called when a message has been received on a
       topic that the client subscribes to. The message variable is a
       MosquittoMessage that describes all of the message parameters.
 
-    on_publish(mosq, obj, mid): called when a message that was to be sent using the
+    on_publish(mosq, userdata, mid): called when a message that was to be sent using the
       publish() call has completed transmission to the broker. For messages
       with QoS levels 1 and 2, this means that the appropriate handshakes have
       completed. For QoS 0, this simply means that the message has left the
@@ -341,23 +346,23 @@ class Mosquitto:
       This callback is important because even if the publish() call returns
       success, it does not always mean that the message has been sent.
 
-    on_subscribe(mosq, obj, mid, granted_qos): called when the broker responds to a
+    on_subscribe(mosq, userdata, mid, granted_qos): called when the broker responds to a
       subscribe request. The mid variable matches the mid variable returned
       from the corresponding subscribe() call. The granted_qos variable is a
       list of integers that give the QoS level the broker has granted for each
       of the different subscription requests.
 
-    on_unsubscribe(mosq, obj, mid): called when the broker responds to an unsubscribe
+    on_unsubscribe(mosq, userdata, mid): called when the broker responds to an unsubscribe
       request. The mid variable matches the mid variable returned from the
       corresponding unsubscribe() call.
 
-    on_log(mosq, obj, level, buf): called when the client has log information. Define
+    on_log(mosq, userdata, level, buf): called when the client has log information. Define
       to allow debugging. The level variable gives the severity of the message
       and will be one of MOSQ_LOG_INFO, MOSQ_LOG_NOTICE, MOSQ_LOG_WARNING,
       MOSQ_LOG_ERR, and MOSQ_LOG_DEBUG. The message itself is in buf.
 
     """
-    def __init__(self, client_id="", clean_session=True, obj=None):
+    def __init__(self, client_id="", clean_session=True, userdata=None):
         """client_id is the unique client id string used when connecting to the
         broker. If client_id is zero length or None, then one will be randomly
         generated. In this case, clean_session must be True. If this is not the
@@ -372,14 +377,14 @@ class Mosquitto:
         disconnect. Calling connect() or reconnect() will cause the messages to
         be resent.  Use reinitialise() to reset a client to its original state.
 
-        obj is user defined data of any type that is passed as the "obj"
+        userdata is user defined data of any type that is passed as the "userdata"
         parameter to callbacks. It may be updated at a later point with the
         user_data_set() function.
         """
         if clean_session == False and (client_id == "" or client_id == None):
             raise ValueError('A client id must be provided if clean session is False.')
 
-        self._obj = obj
+        self._userdata = userdata
         self._sock = None
         self._keepalive = 60
         self._message_retry = 20
@@ -434,7 +439,7 @@ class Mosquitto:
     def __del__(self):
         pass
 
-    def reinitialise(self, client_id="", clean_session=True, obj=None):
+    def reinitialise(self, client_id="", clean_session=True, userdata=None):
         if self._ssl:
             self._ssl.close()
             self._ssl = None
@@ -442,7 +447,7 @@ class Mosquitto:
         elif self._sock:
             self._sock.close()
             self._sock = None
-        self.__init__(client_id, clean_session, obj)
+        self.__init__(client_id, clean_session, userdata)
 
     def tls_set(self, ca_certs, certfile=None, keyfile=None, cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLSv1, ciphers=None):
         """Configure network encryption and authentication options. Enables SSL/TLS support.
@@ -484,6 +489,27 @@ class Mosquitto:
 
         if ca_certs == None:
             raise ValueError('ca_certs must not be None.')
+
+        try:
+            f = open(ca_certs, "r")
+        except IOError as err:
+            raise IOError(ca_certs+": "+err.strerror)
+        else:
+            f.close()
+        if certfile != None:
+            try:
+                f = open(certfile, "r")
+            except IOError as err:
+                raise IOError(certfile+": "+err.strerror)
+            else:
+                f.close()
+        if keyfile != None:
+            try:
+                f = open(keyfile, "r")
+            except IOError as err:
+                raise IOError(keyfile+": "+err.strerror)
+            else:
+                f.close()
 
         self._tls_ca_certs = ca_certs
         self._tls_certfile = certfile
@@ -599,22 +625,25 @@ class Mosquitto:
     def loop(self, timeout=1.0, max_packets=1):
         """Process network events.
 
-        This function must be called regularly to ensure communication with the broker is carried out.
+        This function must be called regularly to ensure communication with the
+        broker is carried out. It calls select() on the network socket to wait
+        for network events. If incoming data is present it will then be
+        processed. Outgoing commands, from e.g. publish(), are normally sent
+        immediately that their function is called, but this is not always
+        possible. loop() will also attempt to send any remaining outgoing
+        messages, which also includes commands that are part of the flow for
+        messages with QoS>0.
 
         timeout: The time in seconds to wait for incoming/outgoing network
           traffic before timing out and returning. 
-        max_packets: The maximum number of packets to process before returning.
-          Must be >0. If set to 1, only a single packet will be processed per
-          call. Avoid setting too high if you have a high incoming message rate.
+        max_packets: Not currently used.
 
         Returns MOSQ_ERR_SUCCESS on success.
         Returns >0 on error.
 
-        A ValueError will be raised if timeout < 0 or if max_packets < 1"""
+        A ValueError will be raised if timeout < 0"""
         if timeout < 0.0:
             raise ValueError('Invalid timeout.')
-        if max_packets < 1:
-            raise ValueError('Invalid max_packets.')
 
         self._current_out_packet_mutex.acquire()
         self._out_packet_mutex.acquire()
@@ -637,47 +666,12 @@ class Mosquitto:
 
         if self.socket() in socklist[0]:
             rc = self.loop_read(max_packets)
-            if rc != MOSQ_ERR_SUCCESS:
-                if self._ssl:
-                    self._ssl.close()
-                    self._ssl = None
-                elif self._sock:
-                    self._sock.close()
-                    self._sock = None
-
-                self._state_mutex.acquire()
-                if self._state == mosq_cs_disconnecting:
-                    rc = MOSQ_ERR_SUCCESS
-                self._state_mutex.release()
-                self._callback_mutex.acquire()
-                if self.on_disconnect:
-                    self._in_callback = True
-                    self.on_disconnect(self, self._obj, rc)
-                    self._in_callback = False
-
-                self._callback_mutex.release()
+            if rc or (self._ssl == None and self._sock == None):
                 return rc
 
         if self.socket() in socklist[1]:
             rc = self.loop_write(max_packets)
-            if rc != MOSQ_ERR_SUCCESS:
-                if self._ssl:
-                    self._ssl.close()
-                    self._ssl = None
-                else:
-                    self._sock.close()
-                    self._sock = None
-
-                self._state_mutex.acquire()
-                if self._state == mosq_cs_disconnecting:
-                    rc = MOSQ_ERR_SUCCESS
-                self._state_mutex.release()
-                self._callback_mutex.acquire()
-                if self.on_disconnect:
-                    self._in_callback = True
-                    self.on_disconnect(self, self._obj, rc)
-                    self._in_callback = False
-                self._callback_mutex.release()
+            if rc or (self._ssl == None and self._sock == None):
                 return rc
 
         return self.loop_misc()
@@ -836,13 +830,14 @@ class Mosquitto:
         if self._sock == None and self._ssl == None:
             return MOSQ_ERR_NO_CONN
 
+        max_packets = len(self._messages)
         if max_packets < 1:
-            raise ValueError('Invalid max_packets.')
+            max_packets = 1
 
         for i in range(0, max_packets):
             rc = self._packet_read()
             if rc > 0:
-                return rc
+                return self._loop_rc_handle(rc)
             elif rc == MOSQ_ERR_AGAIN:
                 return MOSQ_ERR_SUCCESS
         return MOSQ_ERR_SUCCESS
@@ -860,13 +855,14 @@ class Mosquitto:
         if self._sock == None and self._ssl == None:
             return MOSQ_ERR_NO_CONN
 
+        max_packets = len(self._messages)
         if max_packets < 1:
-            raise ValueError('Invalid max_packets.')
+            max_packets = 1
 
         for i in range(0, max_packets):
             rc = self._packet_write()
             if rc > 0:
-                return rc
+                return self._loop_rc_handle(rc)
             elif rc == MOSQ_ERR_AGAIN:
                 return MOSQ_ERR_SUCCESS
         return MOSQ_ERR_SUCCESS
@@ -912,7 +908,7 @@ class Mosquitto:
                 rc = 1
             if self.on_disconnect:
                 self._in_callback = True
-                self.on_disconnect(self, self._obj, rc)
+                self.on_disconnect(self, self._userdata, rc)
                 self._in_callback = False
             self._callback_mutex.release()
             return MOSQ_ERR_CONN_LOST
@@ -927,9 +923,9 @@ class Mosquitto:
 
         self._message_retry = retry
 
-    def user_data_set(self, obj):
+    def user_data_set(self, userdata):
         """Set the user data variable passed to callbacks. May be any data type."""
-        self._obj = obj
+        self._userdata = userdata
 
     def will_set(self, topic, payload=None, qos=0, retain=False):
         """Set a Will to be sent by the broker in case the client disconnects unexpectedly.
@@ -984,6 +980,30 @@ class Mosquitto:
         else:
             return self._sock
 
+    def loop_forever(self, timeout=1.0, max_packets=1):
+        """This function call loop() for you in an infinite blocking loop. It
+        is useful for the case where you only want to run the MQTT client loop
+        in your program.
+
+        loop_forever() will handle reconnecting for you. If you call
+        disconnect() in a callback it will return."""
+
+        run = True
+        if self._state == mosq_cs_connect_async:
+            self.reconnect()
+
+        while run == True:
+            rc = MOSQ_ERR_SUCCESS
+            while rc == MOSQ_ERR_SUCCESS:
+                rc = self.loop(timeout, max_packets)
+
+            if self._state == mosq_cs_disconnecting:
+                run = False
+            else:
+                time.sleep(1)
+                self.reconnect()
+        return rc
+
     def loop_start(self):
         """This is part of the threaded client interface. Call this once to
         start a new thread to process network traffic. This provides an
@@ -1013,6 +1033,28 @@ class Mosquitto:
     # ============================================================
     # Private functions
     # ============================================================
+
+    def _loop_rc_handle(self, rc):
+        if rc:
+            if self._ssl:
+                self._ssl.close()
+                self._ssl = None
+            elif self._sock:
+                self._sock.close()
+                self._sock = None
+
+            self._state_mutex.acquire()
+            if self._state == mosq_cs_disconnecting:
+                rc = MOSQ_ERR_SUCCESS
+            self._state_mutex.release()
+            self._callback_mutex.acquire()
+            if self.on_disconnect:
+                self._in_callback = True
+                self.on_disconnect(self, self._userdata, rc)
+                self._in_callback = False
+
+            self._callback_mutex.release()
+        return rc
 
     def _packet_read(self):
         # This gets called if pselect() indicates that there is network data
@@ -1120,14 +1162,24 @@ class Mosquitto:
         while self._current_out_packet:
             packet = self._current_out_packet
 
-            if self._ssl:
-                try:
+            try:
+                if self._ssl:
                     write_length = self._ssl.write(packet.packet[packet.pos:])
-                except AttributeError:
-                    self._current_out_packet_mutex.release()
-                    return MOSQ_ERR_SUCCESS
-            else:
-                write_length = self._sock.send(packet.packet[packet.pos:])
+                else:
+                    write_length = self._sock.send(packet.packet[packet.pos:])
+            except AttributeError:
+                self._current_out_packet_mutex.release()
+                return MOSQ_ERR_SUCCESS
+            except socket.error as err:
+                self._current_out_packet_mutex.release()
+                (msg) = err
+                if self._ssl and (msg.errno == ssl.SSL_ERROR_WANT_READ or msg.errno == ssl.SSL_ERROR_WANT_WRITE):
+                    return MOSQ_ERR_AGAIN
+                if msg.errno == errno.EAGAIN:
+                    return MOSQ_ERR_AGAIN
+                print(msg)
+                return 1
+
             if write_length > 0:
                 packet.to_process = packet.to_process - write_length
                 packet.pos = packet.pos + write_length
@@ -1137,7 +1189,7 @@ class Mosquitto:
                         self._callback_mutex.acquire()
                         if self.on_publish:
                             self._in_callback = True
-                            self.on_publish(self, self._obj, packet.mid)
+                            self.on_publish(self, self._userdata, packet.mid)
                             self._in_callback = False
 
                         self._callback_mutex.release()
@@ -1161,7 +1213,7 @@ class Mosquitto:
 
     def _easy_log(self, level, buf):
         if self.on_log:
-            self.on_log(self, self._obj, level, buf)
+            self.on_log(self, self._userdata, level, buf)
 
     def _check_keepalive(self):
         now = time.time()
@@ -1172,6 +1224,10 @@ class Mosquitto:
         if (self._sock != None or self._ssl != None) and (now - last_msg_out >= self._keepalive or now - last_msg_in >= self._keepalive):
             if self._state == mosq_cs_connected and self._ping_t == 0:
                 self._send_pingreq()
+                self._msgtime_mutex.acquire()
+                self._last_msg_out = now
+                self._last_msg_in = now
+                self._msgtime_mutex.release()
             else:
                 if self._ssl:
                     self._ssl.close()
@@ -1187,7 +1243,7 @@ class Mosquitto:
                 self._callback_mutex.acquire()
                 if self.on_disconnect:
                     self._in_callback = True
-                    self.on_disconnect(self, self._obj, rc)
+                    self.on_disconnect(self, self._userdata, rc)
                     self._in_callback = False
                 self._callback_mutex.release()
 
@@ -1513,7 +1569,7 @@ class Mosquitto:
         self._callback_mutex.acquire()
         if self.on_connect:
             self._in_callback = True
-            self.on_connect(self, self._obj, result)
+            self.on_connect(self, self._userdata, result)
             self._in_callback = False
         self._callback_mutex.release()
         if result == 0:
@@ -1534,7 +1590,7 @@ class Mosquitto:
         self._callback_mutex.acquire()
         if self.on_subscribe:
             self._in_callback = True
-            self.on_subscribe(self, self._obj, mid, granted_qos)
+            self.on_subscribe(self, self._userdata, mid, granted_qos)
             self._in_callback = False
         self._callback_mutex.release()
 
@@ -1578,7 +1634,7 @@ class Mosquitto:
             self._callback_mutex.acquire()
             if self.on_message:
                 self._in_callback = True
-                self.on_message(self, self._obj, message)
+                self.on_message(self, self._userdata, message)
                 self._in_callback = False
 
             self._callback_mutex.release()
@@ -1588,7 +1644,7 @@ class Mosquitto:
             self._callback_mutex.acquire()
             if self.on_message:
                 self._in_callback = True
-                self.on_message(self, self._obj, message)
+                self.on_message(self, self._userdata, message)
                 self._in_callback = False
 
             self._callback_mutex.release()
@@ -1621,7 +1677,7 @@ class Mosquitto:
                 self._callback_mutex.acquire()
                 if self.on_message:
                     self._in_callback = True
-                    self.on_message(self, self._obj, self._messages[i])
+                    self.on_message(self, self._userdata, self._messages[i])
                     self._in_callback = False
                 self._callback_mutex.release()
                 self._messages.pop(i)
@@ -1658,7 +1714,7 @@ class Mosquitto:
         self._callback_mutex.acquire()
         if self.on_unsubscribe:
             self._in_callback = True
-            self.on_unsubscribe(self, self._obj, mid)
+            self.on_unsubscribe(self, self._userdata, mid)
             self._in_callback = False
         self._callback_mutex.release()
         return MOSQ_ERR_SUCCESS
@@ -1679,7 +1735,7 @@ class Mosquitto:
                     self._callback_mutex.acquire()
                     if self.on_publish:
                         self._in_callback = True
-                        self.on_publish(self, self._obj, mid)
+                        self.on_publish(self, self._userdata, mid)
                         self._in_callback = False
 
                     self._callback_mutex.release()

@@ -6,9 +6,6 @@
 # and client id 01-keepalive-pingreq
 # The client should send a PINGREQ message after the appropriate amount of time
 # (4 seconds after no traffic).
-#
-# FIXME - this test needs improving to ensure the client handles the PINGRESP
-# correctly.
 
 import inspect
 import os
@@ -30,6 +27,7 @@ connect_packet = mosq_test.gen_connect("01-keepalive-pingreq", keepalive=keepali
 connack_packet = mosq_test.gen_connack(rc=0)
 
 pingreq_packet = mosq_test.gen_pingreq()
+pingresp_packet = mosq_test.gen_pingresp()
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -50,14 +48,16 @@ client = subprocess.Popen(client_args, env=env)
 try:
     (conn, address) = sock.accept()
     conn.settimeout(keepalive+10)
-    connect_recvd = conn.recv(len(connect_packet))
 
-    if mosq_test.packet_matches("connect", connect_recvd, connect_packet):
+    if mosq_test.expect_packet(conn, "connect", connect_packet):
         conn.send(connack_packet)
-        pingreq_recvd = conn.recv(len(pingreq_packet))
 
-        if mosq_test.packet_matches("pingreq", pingreq_recvd, pingreq_packet):
-            rc = 0
+        if mosq_test.expect_packet(conn, "pingreq", pingreq_packet):
+            time.sleep(1.0)
+            conn.send(pingresp_packet)
+
+            if mosq_test.expect_packet(conn, "pingreq", pingreq_packet):
+                rc = 0
 
     conn.close()
 finally:

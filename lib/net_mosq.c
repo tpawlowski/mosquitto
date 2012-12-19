@@ -102,6 +102,11 @@ void _mosquitto_net_init(void)
 
 void _mosquitto_net_cleanup(void)
 {
+#ifdef WITH_TLS
+	ERR_free_strings();
+	EVP_cleanup();
+#endif
+
 #ifdef WIN32
 	WSACleanup();
 #endif
@@ -255,10 +260,10 @@ int _mosquitto_socket_connect(struct mosquitto *mosq, const char *host, uint16_t
 #endif
 		COMPAT_CLOSE(sock);
 	}
+	freeaddrinfo(ainfo);
 	if(!rp){
 		return MOSQ_ERR_ERRNO;
 	}
-	freeaddrinfo(ainfo);
 
 	/* Set non-blocking */
 #ifndef WIN32
@@ -310,6 +315,15 @@ int _mosquitto_socket_connect(struct mosquitto *mosq, const char *host, uint16_t
 			COMPAT_CLOSE(sock);
 			return MOSQ_ERR_INVAL;
 		}
+
+#if OPENSSL_VERSION_NUMBER >= 0x10000000
+		/* Disable compression */
+		SSL_CTX_set_options(mosq->ssl_ctx, SSL_OP_NO_COMPRESSION);
+#endif
+#ifdef SSL_MODE_RELEASE_BUFFERS
+			/* Use even less memory per SSL connection. */
+			SSL_CTX_set_mode(mosq->ssl_ctx, SSL_MODE_RELEASE_BUFFERS);
+#endif
 
 		if(mosq->tls_ciphers){
 			ret = SSL_CTX_set_cipher_list(mosq->ssl_ctx, mosq->tls_ciphers);
@@ -523,6 +537,7 @@ ssize_t _mosquitto_net_read(struct mosquitto *mosq, void *buf, size_t count)
 	unsigned long e;
 #endif
 	assert(mosq);
+	errno = 0;
 #ifdef WITH_TLS
 	if(mosq->ssl){
 		ret = SSL_read(mosq->ssl, buf, count);
@@ -572,6 +587,7 @@ ssize_t _mosquitto_net_write(struct mosquitto *mosq, void *buf, size_t count)
 #endif
 	assert(mosq);
 
+	errno = 0;
 #ifdef WITH_TLS
 	if(mosq->ssl){
 		ret = SSL_write(mosq->ssl, buf, count);
@@ -667,7 +683,7 @@ int _mosquitto_packet_write(struct mosquitto *mosq)
 			if(mosq->on_publish){
 				/* This is a QoS=0 message */
 				mosq->in_callback = true;
-				mosq->on_publish(mosq, mosq->obj, packet->mid);
+				mosq->on_publish(mosq, mosq->userdata, packet->mid);
 				mosq->in_callback = false;
 			}
 			pthread_mutex_unlock(&mosq->callback_mutex);
@@ -694,7 +710,7 @@ int _mosquitto_packet_write(struct mosquitto *mosq)
 }
 
 #ifdef WITH_BROKER
-int _mosquitto_packet_read(mosquitto_db *db, struct mosquitto *mosq)
+int _mosquitto_packet_read(struct mosquitto_db *db, struct mosquitto *mosq)
 #else
 int _mosquitto_packet_read(struct mosquitto *mosq)
 #endif

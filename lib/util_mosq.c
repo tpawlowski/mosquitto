@@ -139,7 +139,7 @@ void _mosquitto_check_keepalive(struct mosquitto *mosq)
 			pthread_mutex_lock(&mosq->callback_mutex);
 			if(mosq->on_disconnect){
 				mosq->in_callback = true;
-				mosq->on_disconnect(mosq, mosq->obj, rc);
+				mosq->on_disconnect(mosq, mosq->userdata, rc);
 				mosq->in_callback = false;
 			}
 			pthread_mutex_unlock(&mosq->callback_mutex);
@@ -261,6 +261,10 @@ int mosquitto_topic_matches_sub(const char *sub, const char *topic, bool *result
 				spos++;
 				while(tpos < tlen && local_topic[tpos] != '/'){
 					tpos++;
+				}
+				if(tpos == tlen && spos == slen){
+					*result = true;
+					break;
 				}
 			}else if(local_sub[spos] == '#'){
 				multilevel_wildcard = true;
