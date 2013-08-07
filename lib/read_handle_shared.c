@@ -31,17 +31,17 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <stdio.h>
 #include <string.h>
 
-#include <mosquitto.h>
-#include <logging_mosq.h>
-#include <memory_mosq.h>
-#include <messages_mosq.h>
-#include <mqtt3_protocol.h>
-#include <net_mosq.h>
-#include <read_handle.h>
-#include <send_mosq.h>
-#include <util_mosq.h>
+#include "mosquitto.h"
+#include "logging_mosq.h"
+#include "memory_mosq.h"
+#include "messages_mosq.h"
+#include "mqtt3_protocol.h"
+#include "net_mosq.h"
+#include "read_handle.h"
+#include "send_mosq.h"
+#include "util_mosq.h"
 #ifdef WITH_BROKER
-#include <mosquitto_broker.h>
+#include "mosquitto_broker.h"
 #endif
 
 int _mosquitto_handle_pingreq(struct mosquitto *mosq)
@@ -131,11 +131,11 @@ int _mosquitto_handle_pubrec(struct mosquitto *mosq)
 #ifdef WITH_BROKER
 	_mosquitto_log_printf(NULL, MOSQ_LOG_DEBUG, "Received PUBREC from %s (Mid: %d)", mosq->id, mid);
 
-	rc = mqtt3_db_message_update(mosq, mid, mosq_md_out, ms_wait_for_pubcomp);
+	rc = mqtt3_db_message_update(mosq, mid, mosq_md_out, mosq_ms_wait_for_pubcomp);
 #else
 	_mosquitto_log_printf(mosq, MOSQ_LOG_DEBUG, "Client %s received PUBREC (Mid: %d)", mosq->id, mid);
 
-	rc = _mosquitto_message_update(mosq, mid, mosq_md_out, mosq_ms_wait_pubcomp);
+	rc = _mosquitto_message_update(mosq, mid, mosq_md_out, mosq_ms_wait_for_pubcomp);
 #endif
 	if(rc) return rc;
 	rc = _mosquitto_send_pubrel(mosq, mid, false);
@@ -164,8 +164,8 @@ int _mosquitto_handle_pubrel(struct mosquitto_db *db, struct mosquitto *mosq)
 	_mosquitto_log_printf(NULL, MOSQ_LOG_DEBUG, "Received PUBREL from %s (Mid: %d)", mosq->id, mid);
 
 	if(mqtt3_db_message_release(db, mosq, mid, mosq_md_in)){
-		/* Message not found. */
-		return MOSQ_ERR_SUCCESS;
+		/* Message not found. Still send a PUBCOMP anyway because this could be
+		 * due to a repeated PUBREL after a client has reconnected. */
 	}
 #else
 	_mosquitto_log_printf(mosq, MOSQ_LOG_DEBUG, "Client %s received PUBREL (Mid: %d)", mosq->id, mid);

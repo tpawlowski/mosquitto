@@ -157,14 +157,29 @@ int mosquittopp::connect(const char *host, int port, int keepalive)
 	return mosquitto_connect(m_mosq, host, port, keepalive);
 }
 
+int mosquittopp::connect(const char *host, int port, int keepalive, const char *bind_address)
+{
+	return mosquitto_connect_bind(m_mosq, host, port, keepalive, bind_address);
+}
+
 int mosquittopp::connect_async(const char *host, int port, int keepalive)
 {
 	return mosquitto_connect_async(m_mosq, host, port, keepalive);
 }
 
+int mosquittopp::connect_async(const char *host, int port, int keepalive, const char *bind_address)
+{
+	return mosquitto_connect_bind_async(m_mosq, host, port, keepalive, bind_address);
+}
+
 int mosquittopp::reconnect()
 {
 	return mosquitto_reconnect(m_mosq);
+}
+
+int mosquittopp::reconnect_async()
+{
+	return mosquitto_reconnect_async(m_mosq);
 }
 
 int mosquittopp::disconnect()
@@ -195,6 +210,16 @@ int mosquittopp::username_pw_set(const char *username, const char *password)
 int mosquittopp::publish(int *mid, const char *topic, int payloadlen, const void *payload, int qos, bool retain)
 {
 	return mosquitto_publish(m_mosq, mid, topic, payloadlen, payload, qos, retain);
+}
+
+void mosquittopp::reconnect_delay_set(unsigned int reconnect_delay, unsigned int reconnect_delay_max, bool reconnect_exponential_backoff)
+{
+	mosquitto_reconnect_delay_set(m_mosq, reconnect_delay, reconnect_delay_max, reconnect_exponential_backoff);
+}
+
+int mosquittopp::max_inflight_messages_set(unsigned int max_inflight_messages)
+{
+	return mosquitto_max_inflight_messages_set(m_mosq, max_inflight_messages);
 }
 
 void mosquittopp::message_retry_set(unsigned int message_retry)
@@ -265,6 +290,11 @@ int mosquittopp::tls_set(const char *cafile, const char *capath, const char *cer
 int mosquittopp::tls_opts_set(int cert_reqs, const char *tls_version, const char *ciphers)
 {
 	return mosquitto_tls_opts_set(m_mosq, cert_reqs, tls_version, ciphers);
+}
+
+int mosquittopp::tls_insecure_set(bool value)
+{
+	return mosquitto_tls_insecure_set(m_mosq, value);
 }
 
 int mosquittopp::tls_psk_set(const char *psk, const char *identity, const char *ciphers)

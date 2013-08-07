@@ -9,7 +9,7 @@ clean :
 test-compile : 
 	$(MAKE) -C c
 
-test : test-compile 01 02 03 04 05 06 07 08 09
+test : test-compile 01 02 03 04 05 06 07 08 09 10
 
 01 :
 	./01-connect-success.py
@@ -38,6 +38,7 @@ test : test-compile 01 02 03 04 05 06 07 08 09
 	./03-publish-b2c-timeout-qos1.py
 	./03-publish-b2c-disconnect-qos1.py
 	./03-publish-c2b-timeout-qos2.py
+	./03-publish-c2b-disconnect-qos2.py
 	./03-publish-b2c-timeout-qos2.py
 	./03-publish-b2c-disconnect-qos2.py
 	./03-pattern-matching.py
@@ -62,6 +63,8 @@ test : test-compile 01 02 03 04 05 06 07 08 09
 07 :
 	./07-will-qos0.py
 	./07-will-null.py
+	./07-will-acl-denied.py
+	./07-will-null-topic.py
 
 08 :
 	./08-ssl-connect-no-auth.py
@@ -70,13 +73,19 @@ test : test-compile 01 02 03 04 05 06 07 08 09
 	./08-ssl-connect-cert-auth-without.py
 	./08-ssl-connect-cert-auth-expired.py
 	./08-ssl-connect-cert-auth-revoked.py
+	./08-ssl-connect-cert-auth-crl.py
 	./08-ssl-connect-identity.py
 	./08-ssl-connect-no-identity.py
+	./08-ssl-bridge.py
 	./08-tls-psk-pub.py
 	./08-tls-psk-bridge.py
 
 09 :
 	./09-plugin-auth-unpwd-success.py
+	./09-plugin-auth-unpwd-fail.py
+
+10 :
+	./10-listener-mount-point.py
 
 # Tests for with WITH_STRICT_PROTOCOL defined
 strict-test : 

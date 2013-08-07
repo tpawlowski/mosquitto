@@ -33,6 +33,9 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <mosquitto_broker.h>
 #include <memory_mosq.h>
+#include <time_mosq.h>
+
+#include "uthash.h"
 
 struct mosquitto *mqtt3_context_init(int sock)
 {
@@ -44,8 +47,8 @@ struct mosquitto *mqtt3_context_init(int sock)
 	
 	context->state = mosq_cs_new;
 	context->sock = sock;
-	context->last_msg_in = time(NULL);
-	context->last_msg_out = time(NULL);
+	context->last_msg_in = mosquitto_time();
+	context->last_msg_out = mosquitto_time();
 	context->keepalive = 60; /* Default to 60s */
 	context->clean_session = true;
 	context->disconnect_t = 0;
@@ -104,6 +107,16 @@ void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, b
 		_mosquitto_free(context->password);
 		context->password = NULL;
 	}
+#ifdef WITH_BRIDGE
+	if(context->bridge){
+		if(context->bridge->username){
+			context->bridge->username = NULL;
+		}
+		if(context->bridge->password){
+			context->bridge->password = NULL;
+		}
+	}
+#endif
 	if(context->sock != -1){
 		if(context->listener){
 			context->listener->client_count--;
@@ -121,6 +134,16 @@ void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, b
 		context->address = NULL;
 	}
 	if(context->id){
+		// Remove the context's ID from the DB hash
+		struct _clientid_index_hash *find_cih;
+		HASH_FIND_STR(db->clientid_index_hash, context->id, find_cih);
+		if(find_cih){
+			// FIXME - internal level debug? _mosquitto_log_printf(NULL, MOSQ_LOG_INFO, "Found id for client \"%s\", their index was %d.", context->id, find_cih->db_context_index);
+			HASH_DEL(db->clientid_index_hash, find_cih);
+			_mosquitto_free(find_cih);
+		}else{
+			// FIXME - internal level debug? _mosquitto_log_printf(NULL, MOSQ_LOG_WARNING, "Unable to find id for client \"%s\".", context->id);
+		}
 		_mosquitto_free(context->id);
 		context->id = NULL;
 	}
@@ -136,6 +159,7 @@ void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, b
 		if(context->will->topic) _mosquitto_free(context->will->topic);
 		if(context->will->payload) _mosquitto_free(context->will->payload);
 		_mosquitto_free(context->will);
+		context->will = NULL;
 	}
 	if(do_free || context->clean_session){
 		msg = context->msgs;
@@ -163,7 +187,7 @@ void mqtt3_context_disconnect(struct mosquitto_db *db, struct mosquitto *ctxt)
 		assert(ctxt->listener->client_count >= 0);
 		ctxt->listener = NULL;
 	}
-	ctxt->disconnect_t = time(NULL);
+	ctxt->disconnect_t = mosquitto_time();
 	_mosquitto_socket_close(ctxt);
 }
 

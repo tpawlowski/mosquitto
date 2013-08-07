@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 # Test whether a client responds correctly to a PUBLISH with QoS 1.
 
@@ -70,7 +70,10 @@ finally:
             break
         time.sleep(0.1)
 
-    client.terminate()
+    try:
+        client.terminate()
+    except OSError:
+        pass
     client.wait()
     sock.close()
     if client.returncode != 0:

@@ -22,10 +22,11 @@ set (MOSQ_SRCS
 	../lib/send_client_mosq.c ../lib/send_mosq.h
 	../lib/send_mosq.c ../lib/send_mosq.h
 	send_server.c
+	sys_tree.c
+	../lib/time_mosq.c
+	../lib/tls_mosq.c
 	../lib/util_mosq.c ../lib/util_mosq.h
 	../lib/will_mosq.c ../lib/will_mosq.h)
-
-set (MOSQ_LIBS ${OPENSSL_LIBRARIES})
 
 option(INC_BRIDGE_SUPPORT
 	"Include bridge support for connecting to other brokers?" ON)
@@ -58,6 +59,12 @@ if (${WITH_PERSISTENCE} STREQUAL ON)
 	add_definitions("-DWITH_PERSISTENCE")
 endif (${WITH_PERSISTENCE} STREQUAL ON)
 
+option(WITH_SYS_TREE
+	"Include $SYS tree support?" ON)
+if (${WITH_SYS_TREE} STREQUAL ON)
+	add_definitions("-DWITH_SYS_TREE")
+endif (${WITH_SYS_TREE} STREQUAL ON)
+
 if (WIN32 OR CYGWIN)
 	set (MOSQ_SRCS ${MOSQ_SRCS} service.c)
 endif (WIN32 OR CYGWIN)
@@ -66,11 +73,21 @@ add_definitions (-DWITH_BROKER)
 
 add_executable(mosquitto ${MOSQ_SRCS})
 
-if (NOT WIN32)
-	target_link_libraries(mosquitto dl m ${MOSQ_LIBS})
-else (NOT WIN32)
-	target_link_libraries(mosquitto ws2_32 ${MOSQ_LIBS})
-endif (NOT WIN32)
+set (MOSQ_LIBS ${OPENSSL_LIBRARIES})
+
+if (UNIX)
+	if (APPLE)
+		set (MOSQ_LIBS ${MOSQ_LIBS} dl m)
+	else (APPLE)
+		set (MOSQ_LIBS ${MOSQ_LIBS} rt dl m)
+	endif (APPLE)
+endif (UNIX)
+
+if (WIN32)
+	set (MOSQ_LIBS ${MOSQ_LIBS} ws2_32)
+endif (WIN32)
+
+target_link_libraries(mosquitto ${MOSQ_LIBS})
 
 install(TARGETS mosquitto RUNTIME DESTINATION ${SBINDIR} LIBRARY DESTINATION ${LIBDIR})
 install(FILES mosquitto_plugin.h DESTINATION ${INCLUDEDIR})

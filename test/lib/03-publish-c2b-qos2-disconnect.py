@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 # Test whether a client sends a correct PUBLISH to a topic with QoS 2 and responds to a disconnect.
 
@@ -49,7 +49,7 @@ client = subprocess.Popen(client_args, env=env)
 
 try:
     (conn, address) = sock.accept()
-    conn.settimeout(5)
+    conn.settimeout(10)
 
     if mosq_test.expect_packet(conn, "connect", connect_packet):
         conn.send(connack_packet)
@@ -78,14 +78,11 @@ try:
                         if mosq_test.expect_packet(conn, "connect", connect_packet):
                             conn.send(connack_packet)
 
-                            if mosq_test.expect_packet(conn, "2nd retried publish", publish_dup_packet):
-                                conn.send(pubrec_packet)
+                            if mosq_test.expect_packet(conn, "retried pubrel", pubrel_dup_packet):
+                                conn.send(pubcomp_packet)
 
-                                if mosq_test.expect_packet(conn, "pubrel", pubrel_packet):
-                                    conn.send(pubcomp_packet)
-
-                                    if mosq_test.expect_packet(conn, "disconnect", disconnect_packet):
-                                        rc = 0
+                                if mosq_test.expect_packet(conn, "disconnect", disconnect_packet):
+                                    rc = 0
 
     conn.close()
 finally:

@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2011,2012 Roger Light <roger@atchoo.org>
+Copyright (c) 2011-2013 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,6 +34,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <mosquitto_broker.h>
 #include <memory_mosq.h>
+#include "util_mosq.h"
 
 static int _aclfile_parse(struct mosquitto_db *db);
 static int _unpwd_file_parse(struct mosquitto_db *db);
@@ -315,6 +316,7 @@ int mosquitto_acl_check_default(struct mosquitto_db *db, struct mosquitto *conte
 		if(local_topic[0] == '/'){
 			if(strcmp(acl_tail->topic, "/")){
 				acl_root = acl_root->next;
+				_mosquitto_free(local_topic);
 				continue;
 			}
 			acl_tail = acl_tail->child;
@@ -322,6 +324,14 @@ int mosquitto_acl_check_default(struct mosquitto_db *db, struct mosquitto *conte
 
 		token = strtok_r(local_topic, "/", &saveptr);
 		/* Loop through the topic looking for matches to this ACL. */
+
+		/* If subscription starts with $SYS, acl_tail->topic must also start with $SYS. */
+		if(!strcmp(token, "$SYS") && strcmp(acl_tail->topic, "$SYS")){
+			_mosquitto_free(local_topic);
+
+			acl_root = acl_root->next;
+			continue;
+		}
 		while(token){
 			if(acl_tail){
 				if(!strcmp(acl_tail->topic, "#") && acl_tail->child == NULL){
@@ -464,8 +474,11 @@ static int _aclfile_parse(struct mosquitto_db *db)
 	if(!db || !db->config) return MOSQ_ERR_INVAL;
 	if(!db->config->acl_file) return MOSQ_ERR_SUCCESS;
 
-	aclfile = fopen(db->config->acl_file, "rt");
-	if(!aclfile) return 1;
+	aclfile = _mosquitto_fopen(db->config->acl_file, "rt");
+	if(!aclfile){
+		_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to open acl_file \"%s\".", db->config->acl_file);
+		return 1;
+	}
 
 	// topic [read|write] <topic> 
 	// user <user>
@@ -613,8 +626,11 @@ static int _pwfile_parse(const char *file, struct _mosquitto_unpwd **root)
 	int len;
 	char *saveptr = NULL;
 
-	pwfile = fopen(file, "rt");
-	if(!pwfile) return 1;
+	pwfile = _mosquitto_fopen(file, "rt");
+	if(!pwfile){
+		_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to open pwfile \"%s\".", file);
+		return 1;
+	}
 
 	while(!feof(pwfile)){
 		if(fgets(buf, 256, pwfile)){
@@ -643,7 +659,7 @@ static int _pwfile_parse(const char *file, struct _mosquitto_unpwd **root)
 						return MOSQ_ERR_NOMEM;
 					}
 					len = strlen(unpwd->password);
-					while(unpwd->password[len-1] == 10 || unpwd->password[len-1] == 13){
+					while(len && (unpwd->password[len-1] == 10 || unpwd->password[len-1] == 13)){
 						unpwd->password[len-1] = '\0';
 						len = strlen(unpwd->password);
 					}
@@ -820,10 +836,8 @@ static int _unpwd_cleanup(struct _mosquitto_unpwd **root, bool reload)
 int mosquitto_security_apply_default(struct mosquitto_db *db)
 {
 	struct _mosquitto_acl_user *acl_user_tail;
-	struct _mosquitto_unpwd *u, *tmp;
 	bool allow_anonymous;
 	int i;
-	bool unpwd_ok;
 
 	if(!db) return MOSQ_ERR_INVAL;
 
@@ -839,33 +853,10 @@ int mosquitto_security_apply_default(struct mosquitto_db *db)
 					continue;
 				}
 				/* Check for connected clients that are no longer authorised */
-				if(db->unpwd && db->contexts[i]->username){
-					unpwd_ok = false;
-					HASH_ITER(hh, db->unpwd, u, tmp){
-						if(!strcmp(db->contexts[i]->username, u->username)){
-							if(u->password){
-								if(!db->contexts[i]->password 
-										|| strcmp(db->contexts[i]->password, u->password)){
-
-									/* Non matching password to username. */
-									db->contexts[i]->state = mosq_cs_disconnecting;
-									_mosquitto_socket_close(db->contexts[i]);
-									continue;
-								}else{
-									/* Username matches, password matches. */
-									unpwd_ok = true;
-								}
-							}else{
-								/* Username matches, password not in password file. */
-								unpwd_ok = true;
-							}
-						}
-					}
-					if(!unpwd_ok){
-						db->contexts[i]->state = mosq_cs_disconnecting;
-						_mosquitto_socket_close(db->contexts[i]);
-						continue;
-					}
+				if(mosquitto_unpwd_check_default(db, db->contexts[i]->username, db->contexts[i]->password) != MOSQ_ERR_SUCCESS){
+					db->contexts[i]->state = mosq_cs_disconnecting;
+					_mosquitto_socket_close(db->contexts[i]);
+					continue;
 				}
 				/* Check for ACLs and apply to user. */
 				if(db->acl_list){

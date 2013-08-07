@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2009-2012 Roger Light <roger@atchoo.org>
+Copyright (c) 2009-2013 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -30,6 +30,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <config.h>
 
 #ifndef WIN32
+/* For initgroups() */
+#  define _BSD_SOURCE
+#  include <unistd.h>
+#  include <grp.h>
+#endif
+
+#ifndef WIN32
 #include <pwd.h>
 #else
 #include <process.h>
@@ -47,6 +54,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <mosquitto_broker.h>
 #include <memory_mosq.h>
+#include "util_mosq.h"
 
 struct mosquitto_db int_db;
 
@@ -93,14 +101,19 @@ int drop_privileges(struct mqtt3_config *config)
 				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Invalid user '%s'.", config->user);
 				return 1;
 			}
+			if(initgroups(config->user, pwd->pw_gid) == -1){
+				strerror_r(errno, err, 256);
+				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error setting groups whilst dropping privileges: %s.", err);
+				return 1;
+			}
 			if(setgid(pwd->pw_gid) == -1){
 				strerror_r(errno, err, 256);
-				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
+				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error setting gid whilst dropping privileges: %s.", err);
 				return 1;
 			}
 			if(setuid(pwd->pw_uid) == -1){
 				strerror_r(errno, err, 256);
-				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s.", err);
+				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error setting uid whilst dropping privileges: %s.", err);
 				return 1;
 			}
 		}
@@ -195,7 +208,7 @@ int main(int argc, char *argv[])
 	}
 
 	if(config.daemon && config.pid_file){
-		pid = fopen(config.pid_file, "wt");
+		pid = _mosquitto_fopen(config.pid_file, "wt");
 		if(pid){
 			fprintf(pid, "%d", getpid());
 			fclose(pid);
@@ -233,8 +246,10 @@ int main(int argc, char *argv[])
 	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/version", 2, strlen(buf), buf, 1);
 	snprintf(buf, 1024, "%s", TIMESTAMP);
 	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/timestamp", 2, strlen(buf), buf, 1);
-	snprintf(buf, 1024, "%s", "$Revision$"); // Requires hg keyword extension.
+#ifdef CHANGESET
+	snprintf(buf, 1024, "%s", CHANGESET);
 	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/changeset", 2, strlen(buf), buf, 1);
+#endif
 
 	listener_max = -1;
 	listensock_index = 0;

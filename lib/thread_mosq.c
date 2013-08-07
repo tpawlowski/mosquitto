@@ -27,13 +27,13 @@ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include <config.h>
+#include "config.h"
 
 #ifndef WIN32
 #include <unistd.h>
 #endif
 
-#include <mosquitto_internal.h>
+#include "mosquitto_internal.h"
 
 void *_mosquitto_thread_main(void *obj);
 
@@ -70,11 +70,10 @@ int mosquitto_loop_stop(struct mosquitto *mosq, bool force)
 void *_mosquitto_thread_main(void *obj)
 {
 	struct mosquitto *mosq = obj;
-	int run = 1;
-	int rc;
 
 	if(!mosq) return NULL;
 
+	mosq->threaded = true;
 	pthread_mutex_lock(&mosq->state_mutex);
 	if(mosq->state == mosq_cs_connect_async){
 		pthread_mutex_unlock(&mosq->state_mutex);
@@ -83,24 +82,9 @@ void *_mosquitto_thread_main(void *obj)
 		pthread_mutex_unlock(&mosq->state_mutex);
 	}
 
-	while(run){
-		do{
-			rc = mosquitto_loop(mosq, -1, 1);
-		}while(rc == MOSQ_ERR_SUCCESS);
-		pthread_mutex_lock(&mosq->state_mutex);
-		if(mosq->state == mosq_cs_disconnecting){
-			run = 0;
-			pthread_mutex_unlock(&mosq->state_mutex);
-		}else{
-			pthread_mutex_unlock(&mosq->state_mutex);
-#ifdef WIN32
-			Sleep(1000);
-#else
-			sleep(1);
-#endif
-			mosquitto_reconnect(mosq);
-		}
-	}
+	mosquitto_loop_forever(mosq, -1, 1);
+
+	mosq->threaded = false;
 	return obj;
 }
 #endif

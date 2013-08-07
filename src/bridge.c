@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2009-2012 Roger Light <roger@atchoo.org>
+Copyright (c) 2009-2013 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -28,8 +28,17 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
+
+#ifndef WIN32
+#include <netdb.h>
+#include <sys/socket.h>
+#else
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
 
 #include <config.h>
 
@@ -39,6 +48,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <net_mosq.h>
 #include <memory_mosq.h>
 #include <send_mosq.h>
+#include <time_mosq.h>
+#include <tls_mosq.h>
 #include <util_mosq.h>
 #include <will_mosq.h>
 
@@ -124,7 +135,9 @@ int mqtt3_bridge_new(struct mosquitto_db *db, struct _mqtt3_bridge *bridge)
 	new_context->tls_capath = new_context->bridge->tls_capath;
 	new_context->tls_certfile = new_context->bridge->tls_certfile;
 	new_context->tls_keyfile = new_context->bridge->tls_keyfile;
-#ifdef WITH_TLS_PSK
+	new_context->tls_version = new_context->bridge->tls_version;
+	new_context->tls_insecure = new_context->bridge->tls_insecure;
+#ifdef REAL_WITH_TLS_PSK
 	new_context->tls_psk_identity = new_context->bridge->tls_psk_identity;
 	new_context->tls_psk = new_context->bridge->tls_psk;
 #endif
@@ -141,18 +154,19 @@ int mqtt3_bridge_connect(struct mosquitto_db *db, struct mosquitto *context)
 	int i;
 	char *notification_topic;
 	int notification_topic_len;
-	uint8_t notification_payload[2];
+	uint8_t notification_payload;
 
 	if(!context || !context->bridge) return MOSQ_ERR_INVAL;
 
 	context->state = mosq_cs_new;
 	context->sock = -1;
-	context->last_msg_in = time(NULL);
-	context->last_msg_out = time(NULL);
+	context->last_msg_in = mosquitto_time();
+	context->last_msg_out = mosquitto_time();
 	context->keepalive = context->bridge->keepalive;
 	context->clean_session = context->bridge->clean_session;
 	context->in_packet.payload = NULL;
 	context->ping_t = 0;
+	context->bridge->lazy_reconnect = false;
 	mqtt3_bridge_packet_cleanup(context);
 	mqtt3_db_message_reconnect_reset(context);
 
@@ -173,19 +187,11 @@ int mqtt3_bridge_connect(struct mosquitto_db *db, struct mosquitto *context)
 		}
 	}
 
-	_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE, "Connecting bridge %s", context->bridge->name);
-	rc = _mosquitto_socket_connect(context, context->bridge->address, context->bridge->port);
-	if(rc != MOSQ_ERR_SUCCESS){
-		_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error creating bridge.");
-		return rc;
-	}
-
 	if(context->bridge->notifications){
-		notification_payload[0] = '0';
-		notification_payload[1] = '\0';
+		notification_payload = '0';
 		if(context->bridge->notification_topic){
-			mqtt3_db_messages_easy_queue(db, context, context->bridge->notification_topic, 1, 2, &notification_payload, 1);
-			rc = _mosquitto_will_set(context, context->bridge->notification_topic, 2, &notification_payload, 1, true);
+			mqtt3_db_messages_easy_queue(db, context, context->bridge->notification_topic, 1, 1, &notification_payload, 1);
+			rc = _mosquitto_will_set(context, context->bridge->notification_topic, 1, &notification_payload, 1, true);
 			if(rc != MOSQ_ERR_SUCCESS){
 				return rc;
 			}
@@ -195,8 +201,8 @@ int mqtt3_bridge_connect(struct mosquitto_db *db, struct mosquitto *context)
 			if(!notification_topic) return MOSQ_ERR_NOMEM;
 
 			snprintf(notification_topic, notification_topic_len+1, "$SYS/broker/connection/%s/state", context->id);
-			mqtt3_db_messages_easy_queue(db, context, notification_topic, 1, 2, &notification_payload, 1);
-			rc = _mosquitto_will_set(context, notification_topic, 2, &notification_payload, 1, true);
+			mqtt3_db_messages_easy_queue(db, context, notification_topic, 1, 1, &notification_payload, 1);
+			rc = _mosquitto_will_set(context, notification_topic, 1, &notification_payload, 1, true);
 			if(rc != MOSQ_ERR_SUCCESS){
 				_mosquitto_free(notification_topic);
 				return rc;
@@ -205,7 +211,36 @@ int mqtt3_bridge_connect(struct mosquitto_db *db, struct mosquitto *context)
 		}
 	}
 
-	return _mosquitto_send_connect(context, context->keepalive, context->clean_session);
+	_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE, "Connecting bridge %s (%s:%d)", context->bridge->name, context->bridge->addresses[context->bridge->cur_address].address, context->bridge->addresses[context->bridge->cur_address].port);
+	rc = _mosquitto_socket_connect(context, context->bridge->addresses[context->bridge->cur_address].address, context->bridge->addresses[context->bridge->cur_address].port, NULL, true);
+	if(rc != MOSQ_ERR_SUCCESS){
+		if(rc == MOSQ_ERR_TLS){
+			return rc; /* Error already printed */
+		}else if(rc == MOSQ_ERR_ERRNO){
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error creating bridge: %s.", strerror(errno));
+		}else if(rc == MOSQ_ERR_EAI){
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error creating bridge: %s.", gai_strerror(errno));
+		}
+
+		return rc;
+	}
+
+	rc = _mosquitto_send_connect(context, context->keepalive, context->clean_session);
+	if(rc == MOSQ_ERR_SUCCESS){
+		return MOSQ_ERR_SUCCESS;
+	}else if(rc == MOSQ_ERR_ERRNO && errno == ENOTCONN){
+		return MOSQ_ERR_SUCCESS;
+	}else{
+		if(rc == MOSQ_ERR_TLS){
+			return rc; /* Error already printed */
+		}else if(rc == MOSQ_ERR_ERRNO){
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error creating bridge: %s.", strerror(errno));
+		}else if(rc == MOSQ_ERR_EAI){
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error creating bridge: %s.", gai_strerror(errno));
+		}
+		_mosquitto_socket_close(context);
+		return rc;
+	}
 }
 
 void mqtt3_bridge_packet_cleanup(struct mosquitto *context)

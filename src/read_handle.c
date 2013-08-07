@@ -40,7 +40,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <send_mosq.h>
 #include <util_mosq.h>
 
+#ifdef WITH_SYS_TREE
 extern uint64_t g_pub_bytes_received;
+#endif
 
 int mqtt3_packet_handle(struct mosquitto_db *db, struct mosquitto *context)
 {
@@ -86,7 +88,6 @@ int mqtt3_packet_handle(struct mosquitto_db *db, struct mosquitto *context)
 int mqtt3_handle_publish(struct mosquitto_db *db, struct mosquitto *context)
 {
 	char *topic;
-	char *topic_temp;
 	void *payload = NULL;
 	uint32_t payloadlen;
 	uint8_t dup, qos, retain;
@@ -97,9 +98,12 @@ int mqtt3_handle_publish(struct mosquitto_db *db, struct mosquitto *context)
 	struct mosquitto_msg_store *stored = NULL;
 	int len;
 	char *topic_mount;
+#ifdef WITH_BRIDGE
+	char *topic_temp;
 	int i;
 	struct _mqtt3_bridge_topic *cur_topic;
 	bool match;
+#endif
 
 	dup = (header & 0x08)>>3;
 	qos = (header & 0x06)>>1;
@@ -107,15 +111,9 @@ int mqtt3_handle_publish(struct mosquitto_db *db, struct mosquitto *context)
 
 	if(_mosquitto_read_string(&context->in_packet, &topic)) return 1;
 	if(strlen(topic) == 0){
-#ifdef WITH_STRICT_PROTOCOL
 		/* Invalid publish topic, disconnect client. */
 		_mosquitto_free(topic);
 		return 1;
-#else
-		/* Invalid publish topic, just swallow it. */
-		_mosquitto_free(topic);
-		return 0;
-#endif
 	}
 	if(_mosquitto_fix_sub_topic(&topic)){
 		_mosquitto_free(topic);
@@ -172,7 +170,7 @@ int mqtt3_handle_publish(struct mosquitto_db *db, struct mosquitto *context)
 	if(_mosquitto_topic_wildcard_len_check(topic) != MOSQ_ERR_SUCCESS){
 		/* Invalid publish topic, just swallow it. */
 		_mosquitto_free(topic);
-		return MOSQ_ERR_SUCCESS;
+		return 1;
 	}
 
 	if(qos > 0){
@@ -183,7 +181,9 @@ int mqtt3_handle_publish(struct mosquitto_db *db, struct mosquitto *context)
 	}
 
 	payloadlen = context->in_packet.remaining_length - context->in_packet.pos;
+#ifdef WITH_SYS_TREE
 	g_pub_bytes_received += payloadlen;
+#endif
 	if(context->listener && context->listener->mount_point){
 		len = strlen(context->listener->mount_point) + strlen(topic) + 1;
 		topic_mount = _mosquitto_calloc(len, sizeof(char));
@@ -196,8 +196,11 @@ int mqtt3_handle_publish(struct mosquitto_db *db, struct mosquitto *context)
 		topic = topic_mount;
 	}
 
-	_mosquitto_log_printf(NULL, MOSQ_LOG_DEBUG, "Received PUBLISH from %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", context->id, dup, qos, retain, mid, topic, (long)payloadlen);
 	if(payloadlen){
+		if(db->config->message_size_limit && payloadlen > db->config->message_size_limit){
+			_mosquitto_log_printf(NULL, MOSQ_LOG_DEBUG, "Dropped too large PUBLISH from %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", context->id, dup, qos, retain, mid, topic, (long)payloadlen);
+			goto process_bad_message;
+		}
 		payload = _mosquitto_calloc(payloadlen+1, sizeof(uint8_t));
 		if(_mosquitto_read_bytes(&context->in_packet, payload, payloadlen)){
 			_mosquitto_free(topic);
@@ -208,15 +211,15 @@ int mqtt3_handle_publish(struct mosquitto_db *db, struct mosquitto *context)
 	/* Check for topic access */
 	rc = mosquitto_acl_check(db, context, topic, MOSQ_ACL_WRITE);
 	if(rc == MOSQ_ERR_ACL_DENIED){
-		_mosquitto_free(topic);
-		if(payload) _mosquitto_free(payload);
-		return MOSQ_ERR_SUCCESS;
+		_mosquitto_log_printf(NULL, MOSQ_LOG_DEBUG, "Denied PUBLISH from %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", context->id, dup, qos, retain, mid, topic, (long)payloadlen);
+		goto process_bad_message;
 	}else if(rc != MOSQ_ERR_SUCCESS){
 		_mosquitto_free(topic);
 		if(payload) _mosquitto_free(payload);
 		return rc;
 	}
 
+	_mosquitto_log_printf(NULL, MOSQ_LOG_DEBUG, "Received PUBLISH from %s (d%d, q%d, r%d, m%d, '%s', ... (%ld bytes))", context->id, dup, qos, retain, mid, topic, (long)payloadlen);
 	if(qos > 0){
 		mqtt3_db_message_store_find(context, mid, &stored);
 	}
@@ -257,5 +260,29 @@ int mqtt3_handle_publish(struct mosquitto_db *db, struct mosquitto *context)
 	if(payload) _mosquitto_free(payload);
 
 	return rc;
+process_bad_message:
+	if(topic) _mosquitto_free(topic);
+	if(payload) _mosquitto_free(payload);
+	switch(qos){
+		case 0:
+			return MOSQ_ERR_SUCCESS;
+		case 1:
+			return _mosquitto_send_puback(context, mid);
+		case 2:
+			mqtt3_db_message_store_find(context, mid, &stored);
+			if(!stored){
+				if(mqtt3_db_message_store(db, context->id, mid, NULL, qos, 0, NULL, false, &stored, 0)){
+					return 1;
+				}
+				res = mqtt3_db_message_insert(db, context, mid, mosq_md_in, qos, false, stored);
+			}else{
+				res = 0;
+			}
+			if(!res){
+				res = _mosquitto_send_pubrec(context, mid);
+			}
+			return res;
+	}
+	return 1;
 }
 

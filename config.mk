@@ -59,6 +59,14 @@ WITH_MEMORY_TRACKING:=yes
 # Not currently supported.
 #WITH_DB_UPGRADE:=yes
 
+# Comment out to remove publishing of the $SYS topic hierarchy containing
+# information about the broker state.
+WITH_SYS_TREE:=yes
+
+# Build with Python module. Comment out if Python is not installed, or required
+# Python modules are not available.
+WITH_PYTHON:=yes
+
 # =============================================================================
 # End of user configuration
 # =============================================================================
@@ -66,7 +74,7 @@ WITH_MEMORY_TRACKING:=yes
 
 # Also bump lib/mosquitto.h, lib/python/setup.py, CMakeLists.txt,
 # installer/mosquitto.nsi, installer/mosquitto-cygwin.nsi
-VERSION=1.1.3
+VERSION=1.2
 TIMESTAMP:=$(shell date "+%F %T%z")
 
 # Client library SO version. Bump if incompatible API/ABI changes are made.
@@ -91,7 +99,7 @@ else
 endif
 
 LIB_CFLAGS:=${CFLAGS} ${CPPFLAGS} -I. -I.. -I../lib
-LIB_CXXFLAGS:=$(LIB_CFLAGS)
+LIB_CXXFLAGS:=$(LIB_CFLAGS) ${CPPFLAGS}
 LIB_LDFLAGS:=${LDFLAGS}
 
 BROKER_CFLAGS:=${LIB_CFLAGS} ${CPPFLAGS} -DVERSION="\"${VERSION}\"" -DTIMESTAMP="\"${TIMESTAMP}\"" -DWITH_BROKER
@@ -104,6 +112,11 @@ else
 endif
 LIB_LIBS:=
 PASSWD_LIBS:=
+
+ifeq ($(UNAME),Linux)
+	BROKER_LIBS:=$(BROKER_LIBS) -lrt
+	LIB_LIBS:=$(LIB_LIBS) -lrt
+endif
 
 CLIENT_LDFLAGS:=$(LDFLAGS) -L../lib ../lib/libmosquitto.so.${SOVERSION}
 
@@ -180,6 +193,10 @@ endif
 #ifeq ($(WITH_DB_UPGRADE),yes)
 #	BROKER_CFLAGS:=$(BROKER_CFLAGS) -DWITH_DB_UPGRADE
 #endif
+
+ifeq ($(WITH_SYS_TREE),yes)
+	BROKER_CFLAGS:=$(BROKER_CFLAGS) -DWITH_SYS_TREE
+endif
 
 ifeq ($(UNAME),SunOS)
 	BROKER_LIBS:=$(BROKER_LIBS) -lsocket -lnsl

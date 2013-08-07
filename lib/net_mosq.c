@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2009-2012 Roger Light <roger@atchoo.org>
+Copyright (c) 2009-2013 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -41,6 +41,12 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <ws2tcpip.h>
 #endif
 
+#ifdef __ANDROID__
+#include <linux/in.h>
+#include <linux/in6.h>
+#include <sys/endian.h>
+#endif
+
 #ifdef __FreeBSD__
 #  include <netinet/in.h>
 #endif
@@ -59,28 +65,32 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #ifdef WITH_TLS
 #include <openssl/err.h>
+#include <tls_mosq.h>
 #endif
 
 #ifdef WITH_BROKER
 #  include <mosquitto_broker.h>
+#  ifdef WITH_SYS_TREE
    extern uint64_t g_bytes_received;
    extern uint64_t g_bytes_sent;
    extern unsigned long g_msgs_received;
    extern unsigned long g_msgs_sent;
    extern unsigned long g_pub_msgs_received;
    extern unsigned long g_pub_msgs_sent;
+#  endif
 #else
 #  include <read_handle.h>
 #endif
 
 #include "logging_mosq.h"
-#include <memory_mosq.h>
-#include <mqtt3_protocol.h>
-#include <net_mosq.h>
-#include <util_mosq.h>
+#include "memory_mosq.h"
+#include "mqtt3_protocol.h"
+#include "net_mosq.h"
+#include "time_mosq.h"
+#include "util_mosq.h"
 
 #ifdef WITH_TLS
-static int tls_ex_index_mosq = -1;
+int tls_ex_index_mosq = -1;
 #endif
 
 void _mosquitto_net_init(void)
@@ -105,6 +115,7 @@ void _mosquitto_net_cleanup(void)
 #ifdef WITH_TLS
 	ERR_free_strings();
 	EVP_cleanup();
+	CRYPTO_cleanup_all_ex_data();
 #endif
 
 #ifdef WIN32
@@ -130,8 +141,6 @@ void _mosquitto_packet_cleanup(struct _mosquitto_packet *packet)
 
 int _mosquitto_packet_queue(struct mosquitto *mosq, struct _mosquitto_packet *packet)
 {
-	struct _mosquitto_packet *tail;
-
 	assert(mosq);
 	assert(packet);
 
@@ -141,19 +150,16 @@ int _mosquitto_packet_queue(struct mosquitto *mosq, struct _mosquitto_packet *pa
 	packet->next = NULL;
 	pthread_mutex_lock(&mosq->out_packet_mutex);
 	if(mosq->out_packet){
-		tail = mosq->out_packet;
-		while(tail->next){
-			tail = tail->next;
-		}
-		tail->next = packet;
+		mosq->out_packet_last->next = packet;
 	}else{
 		mosq->out_packet = packet;
 	}
+	mosq->out_packet_last = packet;
 	pthread_mutex_unlock(&mosq->out_packet_mutex);
 #ifdef WITH_BROKER
 	return _mosquitto_packet_write(mosq);
 #else
-	if(mosq->in_callback == false){
+	if(mosq->in_callback == false && mosq->threaded == false){
 		return _mosquitto_packet_write(mosq);
 	}else{
 		return MOSQ_ERR_SUCCESS;
@@ -190,7 +196,7 @@ int _mosquitto_socket_close(struct mosquitto *mosq)
 	return rc;
 }
 
-#ifdef WITH_TLS_PSK
+#ifdef REAL_WITH_TLS_PSK
 static unsigned int psk_client_callback(SSL *ssl, const char *hint,
 		char *identity, unsigned int max_identity_len,
 		unsigned char *psk, unsigned int max_psk_len)
@@ -209,40 +215,44 @@ static unsigned int psk_client_callback(SSL *ssl, const char *hint,
 }
 #endif
 
-/* Create a socket and connect it to 'ip' on port 'port'.
- * Returns -1 on failure (ip is NULL, socket creation/connection error)
- * Returns sock number on success.
- */
-int _mosquitto_socket_connect(struct mosquitto *mosq, const char *host, uint16_t port)
+int _mosquitto_try_connect(const char *host, uint16_t port, int *sock, const char *bind_address, bool blocking)
 {
-	int sock = INVALID_SOCKET;
+	struct addrinfo hints;
+	struct addrinfo *ainfo, *rp;
+	struct addrinfo *ainfo_bind, *rp_bind;
+	int s;
+	int rc;
 #ifndef WIN32
 	int opt;
 #endif
-	struct addrinfo hints;
-	struct addrinfo *ainfo, *rp;
-	int s;
 #ifdef WIN32
 	uint32_t val = 1;
 #endif
-#ifdef WITH_TLS
-	int ret;
-	BIO *bio;
-#endif
 
-	if(!mosq || !host || !port) return MOSQ_ERR_INVAL;
-
+	*sock = INVALID_SOCKET;
 	memset(&hints, 0, sizeof(struct addrinfo));
 	hints.ai_family = PF_UNSPEC;
 	hints.ai_flags = AI_ADDRCONFIG;
 	hints.ai_socktype = SOCK_STREAM;
 
 	s = getaddrinfo(host, NULL, &hints, &ainfo);
-	if(s) return MOSQ_ERR_UNKNOWN;
+	if(s){
+		errno = s;
+		return MOSQ_ERR_EAI;
+	}
+
+	if(bind_address){
+		s = getaddrinfo(bind_address, NULL, &hints, &ainfo_bind);
+		if(s){
+			freeaddrinfo(ainfo);
+			errno = s;
+			return MOSQ_ERR_EAI;
+		}
+	}
 
 	for(rp = ainfo; rp != NULL; rp = rp->ai_next){
-		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-		if(sock == INVALID_SOCKET) continue;
+		*sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+		if(*sock == INVALID_SOCKET) continue;
 		
 		if(rp->ai_family == PF_INET){
 			((struct sockaddr_in *)rp->ai_addr)->sin_port = htons(port);
@@ -251,69 +261,122 @@ int _mosquitto_socket_connect(struct mosquitto *mosq, const char *host, uint16_t
 		}else{
 			continue;
 		}
-		if(connect(sock, rp->ai_addr, rp->ai_addrlen) != -1){
-			break;
+
+		if(bind_address){
+			for(rp_bind = ainfo_bind; rp_bind != NULL; rp_bind = rp_bind->ai_next){
+				if(bind(*sock, rp_bind->ai_addr, rp_bind->ai_addrlen) == 0){
+					break;
+				}
+			}
+			if(!rp_bind){
+				COMPAT_CLOSE(*sock);
+				continue;
+			}
 		}
 
+		if(!blocking){
+			/* Set non-blocking */
+#ifndef WIN32
+			opt = fcntl(*sock, F_GETFL, 0);
+			if(opt == -1 || fcntl(*sock, F_SETFL, opt | O_NONBLOCK) == -1){
+				COMPAT_CLOSE(*sock);
+				continue;
+			}
+#else
+			if(ioctlsocket(*sock, FIONBIO, &val)){
+				COMPAT_CLOSE(*sock);
+				continue;
+			}
+#endif
+		}
+
+		rc = connect(*sock, rp->ai_addr, rp->ai_addrlen);
 #ifdef WIN32
 		errno = WSAGetLastError();
 #endif
-		COMPAT_CLOSE(sock);
+		if(rc == 0 || errno == EINPROGRESS){
+			if(blocking){
+			/* Set non-blocking */
+#ifndef WIN32
+				opt = fcntl(*sock, F_GETFL, 0);
+				if(opt == -1 || fcntl(*sock, F_SETFL, opt | O_NONBLOCK) == -1){
+					COMPAT_CLOSE(*sock);
+					continue;
+				}
+#else
+				if(ioctlsocket(*sock, FIONBIO, &val)){
+					COMPAT_CLOSE(*sock);
+					continue;
+				}
+#endif
+			}
+			break;
+		}
+
+		COMPAT_CLOSE(*sock);
+		*sock = INVALID_SOCKET;
 	}
 	freeaddrinfo(ainfo);
+	if(bind_address){
+		freeaddrinfo(ainfo_bind);
+	}
 	if(!rp){
 		return MOSQ_ERR_ERRNO;
 	}
+	return MOSQ_ERR_SUCCESS;
+}
 
-	/* Set non-blocking */
-#ifndef WIN32
-	opt = fcntl(sock, F_GETFL, 0);
-	if(opt == -1 || fcntl(sock, F_SETFL, opt | O_NONBLOCK) == -1){
+/* Create a socket and connect it to 'ip' on port 'port'.
+ * Returns -1 on failure (ip is NULL, socket creation/connection error)
+ * Returns sock number on success.
+ */
+int _mosquitto_socket_connect(struct mosquitto *mosq, const char *host, uint16_t port, const char *bind_address, bool blocking)
+{
+	int sock = INVALID_SOCKET;
+	int rc;
 #ifdef WITH_TLS
-		if(mosq->ssl){
-			SSL_shutdown(mosq->ssl);
-			SSL_free(mosq->ssl);
-			mosq->ssl = NULL;
-		}
-		if(mosq->ssl_ctx){
-			SSL_CTX_free(mosq->ssl_ctx);
-			mosq->ssl_ctx = NULL;
-		}
+	int ret;
+	BIO *bio;
 #endif
-		COMPAT_CLOSE(sock);
-		return MOSQ_ERR_ERRNO;
-	}
-#else
-	if(ioctlsocket(sock, FIONBIO, &val)){
-		errno = WSAGetLastError();
-#ifdef WITH_TLS
-		if(mosq->ssl){
-			SSL_shutdown(mosq->ssl);
-			SSL_free(mosq->ssl);
-			mosq->ssl = NULL;
-		}
-		if(mosq->ssl_ctx){
-			SSL_CTX_free(mosq->ssl_ctx);
-			mosq->ssl_ctx = NULL;
-		}
-#endif
-		COMPAT_CLOSE(sock);
-		return MOSQ_ERR_ERRNO;
-	}
-#endif
+
+	if(!mosq || !host || !port) return MOSQ_ERR_INVAL;
 
 #ifdef WITH_TLS
 	if(mosq->tls_cafile || mosq->tls_capath || mosq->tls_psk){
-		if(!mosq->tls_version || !strcmp(mosq->tls_version, "tlsv1")){
+		blocking = true;
+	}
+#endif
+
+	rc = _mosquitto_try_connect(host, port, &sock, bind_address, blocking);
+	if(rc != MOSQ_ERR_SUCCESS) return rc;
+
+#ifdef WITH_TLS
+	if(mosq->tls_cafile || mosq->tls_capath || mosq->tls_psk){
+#if OPENSSL_VERSION_NUMBER >= 0x10001000L
+		if(!mosq->tls_version || !strcmp(mosq->tls_version, "tlsv1.2")){
+			mosq->ssl_ctx = SSL_CTX_new(TLSv1_2_client_method());
+		}else if(!strcmp(mosq->tls_version, "tlsv1.1")){
+			mosq->ssl_ctx = SSL_CTX_new(TLSv1_1_client_method());
+		}else if(!strcmp(mosq->tls_version, "tlsv1")){
 			mosq->ssl_ctx = SSL_CTX_new(TLSv1_client_method());
-			if(!mosq->ssl_ctx){
-				_mosquitto_log_printf(mosq, MOSQ_LOG_ERR, "Error: Unable to create TLS context.");
-				COMPAT_CLOSE(sock);
-				return MOSQ_ERR_TLS;
-			}
 		}else{
+			_mosquitto_log_printf(mosq, MOSQ_LOG_ERR, "Error: Protocol %s not supported.", mosq->tls_version);
 			COMPAT_CLOSE(sock);
 			return MOSQ_ERR_INVAL;
+		}
+#else
+		if(!mosq->tls_version || !strcmp(mosq->tls_version, "tlsv1")){
+			mosq->ssl_ctx = SSL_CTX_new(TLSv1_client_method());
+		}else{
+			_mosquitto_log_printf(mosq, MOSQ_LOG_ERR, "Error: Protocol %s not supported.", mosq->tls_version);
+			COMPAT_CLOSE(sock);
+			return MOSQ_ERR_INVAL;
+		}
+#endif
+		if(!mosq->ssl_ctx){
+			_mosquitto_log_printf(mosq, MOSQ_LOG_ERR, "Error: Unable to create TLS context.");
+			COMPAT_CLOSE(sock);
+			return MOSQ_ERR_TLS;
 		}
 
 #if OPENSSL_VERSION_NUMBER >= 0x10000000
@@ -359,7 +422,7 @@ int _mosquitto_socket_connect(struct mosquitto *mosq, const char *host, uint16_t
 			if(mosq->tls_cert_reqs == 0){
 				SSL_CTX_set_verify(mosq->ssl_ctx, SSL_VERIFY_NONE, NULL);
 			}else{
-				SSL_CTX_set_verify(mosq->ssl_ctx, SSL_VERIFY_PEER, NULL);
+				SSL_CTX_set_verify(mosq->ssl_ctx, SSL_VERIFY_PEER, _mosquitto_server_certificate_verify);
 			}
 
 			if(mosq->tls_pw_callback){
@@ -368,7 +431,7 @@ int _mosquitto_socket_connect(struct mosquitto *mosq, const char *host, uint16_t
 			}
 
 			if(mosq->tls_certfile){
-				ret = SSL_CTX_use_certificate_file(mosq->ssl_ctx, mosq->tls_certfile, SSL_FILETYPE_PEM);
+				ret = SSL_CTX_use_certificate_chain_file(mosq->ssl_ctx, mosq->tls_certfile);
 				if(ret != 1){
 #ifdef WITH_BROKER
 					_mosquitto_log_printf(mosq, MOSQ_LOG_ERR, "Error: Unable to load client certificate, check bridge_certfile \"%s\".", mosq->tls_certfile);
@@ -397,7 +460,7 @@ int _mosquitto_socket_connect(struct mosquitto *mosq, const char *host, uint16_t
 					return MOSQ_ERR_TLS;
 				}
 			}
-#ifdef WITH_TLS_PSK
+#ifdef REAL_WITH_TLS_PSK
 		}else if(mosq->tls_psk){
 			SSL_CTX_set_psk_client_callback(mosq->ssl_ctx, psk_client_callback);
 #endif
@@ -639,6 +702,9 @@ int _mosquitto_packet_write(struct mosquitto *mosq)
 	if(mosq->out_packet && !mosq->current_out_packet){
 		mosq->current_out_packet = mosq->out_packet;
 		mosq->out_packet = mosq->out_packet->next;
+		if(!mosq->out_packet){
+			mosq->out_packet_last = NULL;
+		}
 	}
 	pthread_mutex_unlock(&mosq->out_packet_mutex);
 
@@ -648,7 +714,7 @@ int _mosquitto_packet_write(struct mosquitto *mosq)
 		while(packet->to_process > 0){
 			write_length = _mosquitto_net_write(mosq, &(packet->payload[packet->pos]), packet->to_process);
 			if(write_length > 0){
-#ifdef WITH_BROKER
+#if defined(WITH_BROKER) && defined(WITH_SYS_TREE)
 				g_bytes_sent += write_length;
 #endif
 				packet->to_process -= write_length;
@@ -673,10 +739,12 @@ int _mosquitto_packet_write(struct mosquitto *mosq)
 		}
 
 #ifdef WITH_BROKER
+#  ifdef WITH_SYS_TREE
 		g_msgs_sent++;
 		if(((packet->command)&0xF6) == PUBLISH){
 			g_pub_msgs_sent++;
 		}
+#  endif
 #else
 		if(((packet->command)&0xF6) == PUBLISH){
 			pthread_mutex_lock(&mosq->callback_mutex);
@@ -695,6 +763,9 @@ int _mosquitto_packet_write(struct mosquitto *mosq)
 		mosq->current_out_packet = mosq->out_packet;
 		if(mosq->out_packet){
 			mosq->out_packet = mosq->out_packet->next;
+			if(!mosq->out_packet){
+				mosq->out_packet_last = NULL;
+			}
 		}
 		pthread_mutex_unlock(&mosq->out_packet_mutex);
 
@@ -702,7 +773,7 @@ int _mosquitto_packet_write(struct mosquitto *mosq)
 		_mosquitto_free(packet);
 
 		pthread_mutex_lock(&mosq->msgtime_mutex);
-		mosq->last_msg_out = time(NULL);
+		mosq->last_msg_out = mosquitto_time();
 		pthread_mutex_unlock(&mosq->msgtime_mutex);
 	}
 	pthread_mutex_unlock(&mosq->current_out_packet_mutex);
@@ -740,7 +811,9 @@ int _mosquitto_packet_read(struct mosquitto *mosq)
 		if(read_length == 1){
 			mosq->in_packet.command = byte;
 #ifdef WITH_BROKER
+#  ifdef WITH_SYS_TREE
 			g_bytes_received++;
+#  endif
 			/* Clients must send CONNECT as their first command. */
 			if(!(mosq->bridge) && mosq->state == mosq_cs_new && (byte&0xF0) != CONNECT) return MOSQ_ERR_PROTOCOL;
 #endif
@@ -775,7 +848,7 @@ int _mosquitto_packet_read(struct mosquitto *mosq)
 				 */
 				if(mosq->in_packet.remaining_count > 4) return MOSQ_ERR_PROTOCOL;
 
-#ifdef WITH_BROKER
+#if defined(WITH_BROKER) && defined(WITH_SYS_TREE)
 				g_bytes_received++;
 #endif
 				mosq->in_packet.remaining_length += (byte & 127) * mosq->in_packet.remaining_mult;
@@ -808,7 +881,7 @@ int _mosquitto_packet_read(struct mosquitto *mosq)
 	while(mosq->in_packet.to_process>0){
 		read_length = _mosquitto_net_read(mosq, &(mosq->in_packet.payload[mosq->in_packet.pos]), mosq->in_packet.to_process);
 		if(read_length > 0){
-#ifdef WITH_BROKER
+#if defined(WITH_BROKER) && defined(WITH_SYS_TREE)
 			g_bytes_received += read_length;
 #endif
 			mosq->in_packet.to_process -= read_length;
@@ -833,10 +906,12 @@ int _mosquitto_packet_read(struct mosquitto *mosq)
 	/* All data for this packet is read. */
 	mosq->in_packet.pos = 0;
 #ifdef WITH_BROKER
+#  ifdef WITH_SYS_TREE
 	g_msgs_received++;
 	if(((mosq->in_packet.command)&0xF5) == PUBLISH){
 		g_pub_msgs_received++;
 	}
+#  endif
 	rc = mqtt3_packet_handle(db, mosq);
 #else
 	rc = _mosquitto_packet_handle(mosq);
@@ -846,7 +921,7 @@ int _mosquitto_packet_read(struct mosquitto *mosq)
 	_mosquitto_packet_cleanup(&mosq->in_packet);
 
 	pthread_mutex_lock(&mosq->msgtime_mutex);
-	mosq->last_msg_in = time(NULL);
+	mosq->last_msg_in = mosquitto_time();
 	pthread_mutex_unlock(&mosq->msgtime_mutex);
 	return rc;
 }

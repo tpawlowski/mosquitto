@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 # Test whether a retained PUBLISH to a topic with QoS 0 is actually retained
 # and delivered when multiple sub/unsub operations are carried out.
@@ -35,7 +35,7 @@ try:
     time.sleep(0.5)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(5)
+    sock.settimeout(20)
     sock.connect(("localhost", 1888))
     sock.send(connect_packet)
 

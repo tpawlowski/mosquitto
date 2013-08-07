@@ -108,6 +108,22 @@ int _mosquitto_log_printf(struct mosquitto *mosq, int priority, const char *fmt,
 
 	if((log_priorities & priority) && log_destinations != MQTT3_LOG_NONE){
 		switch(priority){
+			case MOSQ_LOG_SUBSCRIBE:
+				topic = "$SYS/broker/log/M/subscribe";
+#ifndef WIN32
+				syslog_priority = LOG_NOTICE;
+#else
+				syslog_priority = EVENTLOG_INFORMATION_TYPE;
+#endif
+				break;
+			case MOSQ_LOG_UNSUBSCRIBE:
+				topic = "$SYS/broker/log/M/unsubscribe";
+#ifndef WIN32
+				syslog_priority = LOG_NOTICE;
+#else
+				syslog_priority = EVENTLOG_INFORMATION_TYPE;
+#endif
+				break;
 			case MOSQ_LOG_DEBUG:
 				topic = "$SYS/broker/log/D";
 #ifndef WIN32
@@ -180,6 +196,13 @@ int _mosquitto_log_printf(struct mosquitto *mosq, int priority, const char *fmt,
 				fprintf(stderr, "%s\n", s);
 			}
 			fflush(stderr);
+		}
+		if(log_destinations & MQTT3_LOG_FILE && int_db.config->log_fptr){
+			if(int_db.config && int_db.config->log_timestamp){
+				fprintf(int_db.config->log_fptr, "%d: %s\n", (int)now, s);
+			}else{
+				fprintf(int_db.config->log_fptr, "%s\n", s);
+			}
 		}
 		if(log_destinations & MQTT3_LOG_SYSLOG){
 #ifndef WIN32

@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 # Test whether a valid CONNECT results in the correct CONNACK packet using an
 # SSL connection with client certificates required.
@@ -26,14 +26,14 @@ keepalive = 10
 connect_packet = mosq_test.gen_connect("connect-success-test", keepalive=keepalive)
 connack_packet = mosq_test.gen_connack(rc=0)
 
-broker = subprocess.Popen(['../../src/mosquitto', '-c', '08-ssl-connect-cert-auth.conf'], stderr=subprocess.PIPE)
+broker = subprocess.Popen(['../../src/mosquitto', '-v', '-c', '08-ssl-connect-cert-auth.conf'], stderr=subprocess.PIPE)
 
 try:
     time.sleep(0.5)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    ssock = ssl.wrap_socket(sock, ca_certs="../ssl/test-ca.crt", certfile="../ssl/client-expired.crt", keyfile="../ssl/client.key", cert_reqs=ssl.CERT_REQUIRED)
-    ssock.settimeout(5)
+    ssock = ssl.wrap_socket(sock, ca_certs="../ssl/test-root-ca.crt", certfile="../ssl/client-expired.crt", keyfile="../ssl/client.key", cert_reqs=ssl.CERT_REQUIRED)
+    ssock.settimeout(20)
     try:
         ssock.connect(("localhost", 1888))
     except ssl.SSLError as err:

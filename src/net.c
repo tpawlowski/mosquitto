@@ -67,12 +67,15 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <util_mosq.h>
 
 #ifdef WITH_TLS
-#include <openssl/ssl.h>
+#include "tls_mosq.h"
+#include <openssl/err.h>
 static int tls_ex_index_context = -1;
 static int tls_ex_index_listener = -1;
 #endif
 
+#ifdef WITH_SYS_TREE
 extern unsigned int g_socket_connections;
+#endif
 
 int mqtt3_socket_accept(struct mosquitto_db *db, int listensock)
 {
@@ -85,6 +88,8 @@ int mqtt3_socket_accept(struct mosquitto_db *db, int listensock)
 #ifdef WITH_TLS
 	BIO *bio;
 	int rc;
+	char ebuf[256];
+	unsigned long e;
 #endif
 #ifdef WITH_WRAP
 	struct request_info wrap_req;
@@ -94,7 +99,9 @@ int mqtt3_socket_accept(struct mosquitto_db *db, int listensock)
 	new_sock = accept(listensock, NULL, 0);
 	if(new_sock == INVALID_SOCKET) return -1;
 
+#ifdef WITH_SYS_TREE
 	g_socket_connections++;
+#endif
 
 #ifndef WIN32
 	/* Set non-blocking */
@@ -147,7 +154,7 @@ int mqtt3_socket_accept(struct mosquitto_db *db, int listensock)
 			COMPAT_CLOSE(new_sock);
 			return -1;
 		}
-		_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE, "New connection from %s.", new_context->address);
+		_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE, "New connection from %s on port %d.", new_context->address, new_context->listener->port);
 		for(i=0; i<db->context_count; i++){
 			if(db->contexts[i] == NULL){
 				db->contexts[i] = new_context;
@@ -159,11 +166,14 @@ int mqtt3_socket_accept(struct mosquitto_db *db, int listensock)
 			if(tmp_contexts){
 				db->context_count++;
 				db->contexts = tmp_contexts;
-				db->contexts[db->context_count-1] = new_context;
+				db->contexts[i] = new_context;
 			}else{
+				// Out of memory
 				mqtt3_context_cleanup(NULL, new_context, true);
 			}
 		}
+		// If we got here then the context's DB index is "i" regardless of how we got here
+		new_context->db_index = i;
 		new_context->listener->client_count++;
 
 #ifdef WITH_TLS
@@ -190,6 +200,14 @@ int mqtt3_socket_accept(struct mosquitto_db *db, int listensock)
 								new_context->want_read = true;
 							}else if(rc == SSL_ERROR_WANT_WRITE){
 								new_context->want_write = true;
+							}else{
+								e = ERR_get_error();
+								while(e){
+									_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE,
+											"Client connection from %s failed: %s.",
+											new_context->address, ERR_error_string(e, ebuf));
+									e = ERR_get_error();
+								}
 							}
 						}
 					}
@@ -212,7 +230,7 @@ static int client_certificate_verify(int preverify_ok, X509_STORE_CTX *ctx)
 }
 #endif
 
-#if defined(WITH_TLS) && defined(WITH_TLS_PSK)
+#ifdef REAL_WITH_TLS_PSK
 static unsigned int psk_server_callback(SSL *ssl, const char *identity, unsigned char *psk, unsigned int max_psk_len)
 {
 	struct mosquitto_db *db;
@@ -357,7 +375,19 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 	if(listener->sock_count > 0){
 #ifdef WITH_TLS
 		if((listener->cafile || listener->capath) && listener->certfile && listener->keyfile){
+#if OPENSSL_VERSION_NUMBER >= 0x10001000L
+			if(listener->tls_version == NULL){
+				listener->ssl_ctx = SSL_CTX_new(TLSv1_2_server_method());
+			}else if(!strcmp(listener->tls_version, "tlsv1.2")){
+				listener->ssl_ctx = SSL_CTX_new(TLSv1_2_server_method());
+			}else if(!strcmp(listener->tls_version, "tlsv1.1")){
+				listener->ssl_ctx = SSL_CTX_new(TLSv1_1_server_method());
+			}else if(!strcmp(listener->tls_version, "tlsv1")){
+				listener->ssl_ctx = SSL_CTX_new(TLSv1_server_method());
+			}
+#else
 			listener->ssl_ctx = SSL_CTX_new(TLSv1_server_method());
+#endif
 			if(!listener->ssl_ctx){
 				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to create TLS context.");
 				COMPAT_CLOSE(sock);
@@ -397,7 +427,7 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 			}else{
 				SSL_CTX_set_verify(listener->ssl_ctx, SSL_VERIFY_PEER, client_certificate_verify);
 			}
-			rc = SSL_CTX_use_certificate_file(listener->ssl_ctx, listener->certfile, SSL_FILETYPE_PEM);
+			rc = SSL_CTX_use_certificate_chain_file(listener->ssl_ctx, listener->certfile);
 			if(rc != 1){
 				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to load server certificate \"%s\". Check certfile.", listener->certfile);
 				COMPAT_CLOSE(sock);
@@ -433,7 +463,7 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 				X509_STORE_set_flags(store, X509_V_FLAG_CRL_CHECK);
 			}
 
-#  ifdef WITH_TLS_PSK
+#  ifdef REAL_WITH_TLS_PSK
 		}else if(listener->psk_hint){
 			if(tls_ex_index_context == -1){
 				tls_ex_index_context = SSL_get_ex_new_index(0, "client context", NULL, NULL, NULL);
@@ -442,7 +472,19 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 				tls_ex_index_listener = SSL_get_ex_new_index(0, "listener", NULL, NULL, NULL);
 			}
 
+#if OPENSSL_VERSION_NUMBER >= 0x10001000L
+			if(listener->tls_version == NULL){
+				listener->ssl_ctx = SSL_CTX_new(TLSv1_2_server_method());
+			}else if(!strcmp(listener->tls_version, "tlsv1.2")){
+				listener->ssl_ctx = SSL_CTX_new(TLSv1_2_server_method());
+			}else if(!strcmp(listener->tls_version, "tlsv1.1")){
+				listener->ssl_ctx = SSL_CTX_new(TLSv1_1_server_method());
+			}else if(!strcmp(listener->tls_version, "tlsv1")){
+				listener->ssl_ctx = SSL_CTX_new(TLSv1_server_method());
+			}
+#else
 			listener->ssl_ctx = SSL_CTX_new(TLSv1_server_method());
+#endif
 			if(!listener->ssl_ctx){
 				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to create TLS context.");
 				COMPAT_CLOSE(sock);
@@ -465,7 +507,7 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 					return 1;
 				}
 			}
-#  endif /* WITH_TLS_PSK */
+#  endif /* REAL_WITH_TLS_PSK */
 		}
 #endif /* WITH_TLS */
 		return 0;

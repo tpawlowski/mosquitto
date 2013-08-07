@@ -25,6 +25,13 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+
+This product includes software developed by the OpenSSL Project for use in the
+OpenSSL Toolkit. (http://www.openssl.org/)
+This product includes cryptographic software written by Eric Young
+(eay@cryptsoft.com)
+This product includes software written by Tim Hudson (tjh@cryptsoft.com)
 */
 
 #ifndef _MOSQUITTOPP_H_
@@ -75,15 +82,21 @@ class mosqpp_EXPORT mosquittopp {
 		int username_pw_set(const char *username, const char *password=NULL);
 		int connect(const char *host, int port=1883, int keepalive=60);
 		int connect_async(const char *host, int port=1883, int keepalive=60);
+		int connect(const char *host, int port, int keepalive, const char *bind_address);
+		int connect_async(const char *host, int port, int keepalive, const char *bind_address);
 		int reconnect();
+		int reconnect_async();
 		int disconnect();
 		int publish(int *mid, const char *topic, int payloadlen=0, const void *payload=NULL, int qos=0, bool retain=false);
 		int subscribe(int *mid, const char *sub, int qos=0);
 		int unsubscribe(int *mid, const char *sub);
+		void reconnect_delay_set(unsigned int reconnect_delay, unsigned int reconnect_delay_max, bool reconnect_exponential_backoff);
+		int max_inflight_messages_set(unsigned int max_inflight_messages);
 		void message_retry_set(unsigned int message_retry);
 		void user_data_set(void *userdata);
 		int tls_set(const char *cafile, const char *capath=NULL, const char *certfile=NULL, const char *keyfile=NULL, int (*pw_callback)(char *buf, int size, int rwflag, void *userdata)=NULL);
 		int tls_opts_set(int cert_reqs, const char *tls_version=NULL, const char *ciphers=NULL);
+		int tls_insecure_set(bool value);
 		int tls_psk_set(const char *psk, const char *identity, const char *ciphers=NULL);
 
 		int loop(int timeout=-1, int max_packets=1);

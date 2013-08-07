@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 # Test whether a client subscribed to a topic receives its own message sent to that topic.
 
@@ -36,7 +36,7 @@ try:
     time.sleep(0.5)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(10)
+    sock.settimeout(20)
     sock.connect(("localhost", 1888))
     sock.send(connect_packet)
 

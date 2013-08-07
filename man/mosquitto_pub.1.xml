@@ -17,6 +17,7 @@
 	<refsynopsisdiv>
 		<cmdsynopsis>
 			<command>mosquitto_pub</command>
+			<arg><option>-A</option> <replaceable>bind_address</replaceable></arg>
 			<arg><option>-d</option></arg>
 			<arg><option>-h</option> <replaceable>hostname</replaceable></arg>
 			<arg><option>-i</option> <replaceable>client_id</replaceable></arg>
@@ -50,10 +51,13 @@
 					</group>
 					<arg><option>--cert</option> <replaceable>file</replaceable></arg>
 					<arg><option>--key</option> <replaceable>file</replaceable></arg>
+					<arg><option>--tls-version</option> <replaceable>version</replaceable></arg>
+					<arg><option>--insecure</option></arg>
 				</arg>
 				<arg>
 					<arg choice='plain'><option>--psk</option> <replaceable>hex-key</replaceable></arg>
 					<arg choice='plain'><option>--psk-identity</option> <replaceable>identity</replaceable></arg>
+					<arg><option>--tls-version</option> <replaceable>version</replaceable></arg>
 				</arg>
 			</group>
 			<arg choice='plain'><option>-t</option> <replaceable>message-topic</replaceable></arg>
@@ -74,6 +78,15 @@
 	<refsect1>
 		<title>Options</title>
 		<variablelist>
+			<varlistentry>
+				<term><option>-A</option></term>
+				<listitem>
+					<para>Bind the outgoing connection to a local ip
+						address/hostname. Use this argument if you need to
+						restrict network communication to a particular
+						interface.</para>
+				</listitem>
+			</varlistentry>
 			<varlistentry>
 				<term><option>--cafile</option></term>
 				<listitem>
@@ -151,6 +164,21 @@
 					useful where the broker is using the clientid_prefixes
 					option. Cannot be used at the same time as the
 					<option>--id</option> argument.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>--insecure</option></term>
+				<listitem>
+					<para>When using certificate based encryption, this option
+						disables verification of the server hostname in the
+						server certificate. This can be useful when testing
+						initial server configurations but makes it possible for
+						a malicious third party to impersonate your server
+						through DNS spoofing, for example. Use this option in
+						testing <emphasis>only</emphasis>. If you need to
+						resort to using this option in a production
+						environment, your setup is at fault and there is no
+						point using encryption.</para>
 				</listitem>
 			</varlistentry>
 			<varlistentry>
@@ -253,6 +281,19 @@
 				<term><option>--topic</option></term>
 				<listitem>
 					<para>The MQTT topic on which to publish the message. See <citerefentry><refentrytitle>mqtt</refentrytitle><manvolnum>7</manvolnum></citerefentry> for more information on MQTT topics.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>--tls-version</option></term>
+				<listitem>
+					<para>Choose which TLS protocol version to use when
+						communicating with the broker. Valid options are
+						<option>tlsv1.2</option>, <option>tlsv1.1</option> and
+						<option>tlsv1</option>. The default value is
+						<option>tlsv1.2</option>. If the installed version of
+						openssl is too old, only <option>tlsv1</option> will be
+						available. Must match the protocol version used by the
+						broker.</para>
 				</listitem>
 			</varlistentry>
 			<varlistentry>

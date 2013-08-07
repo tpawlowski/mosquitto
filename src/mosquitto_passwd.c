@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2012 Roger Light <roger@atchoo.org>
+Copyright (c) 2012,2013 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -28,6 +28,7 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 
+#include <errno.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/buffer.h>
@@ -183,12 +184,18 @@ int update_file(FILE *fptr, FILE *ftmp)
 	char lbuf[MAX_BUFFER_LEN];
 	char *username, *password;
 	int rc;
+	int len;
 
 	while(!feof(fptr) && fgets(buf, MAX_BUFFER_LEN, fptr)){
 		memcpy(lbuf, buf, MAX_BUFFER_LEN);
 		username = strtok(lbuf, ":");
 		password = strtok(NULL, ":");
 		if(password){
+			len = strlen(password);
+			while(len && (password[len-1] == '\n' || password[len-1] == '\r')){
+				password[len-1] = '\0';
+				len = strlen(password);
+			}
 			rc = output_new_password(ftmp, username, password);
 			if(rc) return rc;
 		}else{
@@ -402,7 +409,7 @@ int main(int argc, char *argv[])
 		if(rc) return rc;
 		fptr = fopen(password_file, "wt");
 		if(!fptr){
-			fprintf(stderr, "Error: Unable to open file %s for writing.\n", password_file);
+			fprintf(stderr, "Error: Unable to open file %s for writing. %s.\n", password_file, strerror(errno));
 			return 1;
 		}
 		rc = output_new_password(fptr, username, password);
@@ -411,7 +418,7 @@ int main(int argc, char *argv[])
 	}else{
 		fptr = fopen(password_file, "r+t");
 		if(!fptr){
-			fprintf(stderr, "Error: Unable to open password file %s.\n", password_file);
+			fprintf(stderr, "Error: Unable to open password file %s. %s.\n", password_file, strerror(errno));
 			return 1;
 		}
 
@@ -426,7 +433,7 @@ int main(int argc, char *argv[])
 
 		ftmp = tmpfile();
 		if(!ftmp){
-			fprintf(stderr, "Error: Unable to open temporary file.\n");
+			fprintf(stderr, "Error: Unable to open temporary file. %s.\n", strerror(errno));
 			fclose(fptr);
 			free(backup_file);
 			return 1;

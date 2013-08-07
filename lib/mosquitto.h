@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2010-2012 Roger Light <roger@atchoo.org>
+Copyright (c) 2010-2013 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -25,6 +25,13 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+
+This product includes software developed by the OpenSSL Project for use in the
+OpenSSL Toolkit. (http://www.openssl.org/)
+This product includes cryptographic software written by Eric Young
+(eay@cryptsoft.com)
+This product includes software written by Tim Hudson (tjh@cryptsoft.com)
 */
 
 #ifndef _MOSQUITTO_H_
@@ -57,8 +64,8 @@ extern "C" {
 #endif
 
 #define LIBMOSQUITTO_MAJOR 1
-#define LIBMOSQUITTO_MINOR 1
-#define LIBMOSQUITTO_REVISION 3
+#define LIBMOSQUITTO_MINOR 2
+#define LIBMOSQUITTO_REVISION 0
 #define LIBMOSQUITTO_VERSION_NUMBER (LIBMOSQUITTO_MAJOR*1000000+LIBMOSQUITTO_MINOR*1000+LIBMOSQUITTO_REVISION)
 
 /* Log types */
@@ -68,10 +75,13 @@ extern "C" {
 #define MOSQ_LOG_WARNING 0x04
 #define MOSQ_LOG_ERR 0x08
 #define MOSQ_LOG_DEBUG 0x10
-#define MOSQ_LOG_ALL 0xFF
+#define MOSQ_LOG_SUBSCRIBE 0x20
+#define MOSQ_LOG_UNSUBSCRIBE 0x40
+#define MOSQ_LOG_ALL 0xFFFF
 
 /* Error values */
 enum mosq_err_t {
+	MOSQ_ERR_CONN_PENDING = -1,
 	MOSQ_ERR_SUCCESS = 0,
 	MOSQ_ERR_NOMEM = 1,
 	MOSQ_ERR_PROTOCOL = 2,
@@ -86,7 +96,8 @@ enum mosq_err_t {
 	MOSQ_ERR_AUTH = 11,
 	MOSQ_ERR_ACL_DENIED = 12,
 	MOSQ_ERR_UNKNOWN = 13,
-	MOSQ_ERR_ERRNO = 14
+	MOSQ_ERR_ERRNO = 14,
+	MOSQ_ERR_EAI = 15
 };
 
 /* MQTT specification restricts client ids to a maximum of 23 characters */
@@ -337,9 +348,39 @@ libmosq_EXPORT int mosquitto_username_pw_set(struct mosquitto *mosq, const char 
  *                     Windows.
  *
  * See Also:
- * 	<mosquitto_connect_async>, <mosquitto_reconnect>, <mosquitto_disconnect>, <mosquitto_tls_set>
+ * 	<mosquitto_connect_bind>, <mosquitto_connect_async>, <mosquitto_reconnect>, <mosquitto_disconnect>, <mosquitto_tls_set>
  */
 libmosq_EXPORT int mosquitto_connect(struct mosquitto *mosq, const char *host, int port, int keepalive);
+
+/*
+ * Function: mosquitto_connect_bind
+ *
+ * Connect to an MQTT broker. This extends the functionality of
+ * <mosquitto_connect> by adding the bind_address parameter. Use this function
+ * if you need to restrict network communication over a particular interface. 
+ *
+ * Parameters:
+ * 	mosq -         a valid mosquitto instance.
+ * 	host -         the hostname or ip address of the broker to connect to.
+ * 	port -         the network port to connect to. Usually 1883.
+ * 	keepalive -    the number of seconds after which the broker should send a PING
+ *                 message to the client if no other messages have been exchanged
+ *                 in that time.
+ *  bind_address - the hostname or ip address of the local network interface to
+ *                 bind to.
+ *
+ * Returns:
+ * 	MOSQ_ERR_SUCCESS - on success.
+ * 	MOSQ_ERR_INVAL -   if the input parameters were invalid.
+ * 	MOSQ_ERR_ERRNO -   if a system call returned an error. The variable errno
+ *                     contains the error code, even on Windows.
+ *                     Use strerror_r() where available or FormatMessage() on
+ *                     Windows.
+ *
+ * See Also:
+ * 	<mosquitto_connect>, <mosquitto_connect_async>, <mosquitto_connect_bind_async>
+ */
+libmosq_EXPORT int mosquitto_connect_bind(struct mosquitto *mosq, const char *host, int port, int keepalive, const char *bind_address);
 
 /*
  * Function: mosquitto_connect_async
@@ -368,9 +409,46 @@ libmosq_EXPORT int mosquitto_connect(struct mosquitto *mosq, const char *host, i
  *                     Windows.
  *
  * See Also:
- * 	<mosquitto_connect>, <mosquitto_reconnect>, <mosquitto_disconnect>, <mosquitto_tls_set>
+ * 	<mosquitto_connect_bind_async>, <mosquitto_connect>, <mosquitto_reconnect>, <mosquitto_disconnect>, <mosquitto_tls_set>
  */
 libmosq_EXPORT int mosquitto_connect_async(struct mosquitto *mosq, const char *host, int port, int keepalive);
+
+/*
+ * Function: mosquitto_connect_async
+ *
+ * Connect to an MQTT broker. This is a non-blocking call. If you use
+ * <mosquitto_connect_async> your client must use the threaded interface
+ * <mosquitto_loop_start>. If you need to use <mosquitto_loop>, you must use
+ * <mosquitto_connect> to connect the client.
+ *
+ * This extends the functionality of <mosquitto_connect_async> by adding the
+ * bind_address parameter. Use this function if you need to restrict network
+ * communication over a particular interface. 
+ *
+ * May be called before or after <mosquitto_loop_start>.
+ *
+ * Parameters:
+ * 	mosq -         a valid mosquitto instance.
+ * 	host -         the hostname or ip address of the broker to connect to.
+ * 	port -         the network port to connect to. Usually 1883.
+ * 	keepalive -    the number of seconds after which the broker should send a PING
+ *                 message to the client if no other messages have been exchanged
+ *                 in that time.
+ *  bind_address - the hostname or ip address of the local network interface to
+ *                 bind to.
+ *
+ * Returns:
+ * 	MOSQ_ERR_SUCCESS - on success.
+ * 	MOSQ_ERR_INVAL -   if the input parameters were invalid.
+ * 	MOSQ_ERR_ERRNO -   if a system call returned an error. The variable errno
+ *                     contains the error code, even on Windows.
+ *                     Use strerror_r() where available or FormatMessage() on
+ *                     Windows.
+ *
+ * See Also:
+ * 	<mosquitto_connect_async>, <mosquitto_connect>, <mosquitto_connect_bind>
+ */
+libmosq_EXPORT int mosquitto_connect_bind_async(struct mosquitto *mosq, const char *host, int port, int keepalive, const char *bind_address);
 
 /*
  * Function: mosquitto_reconnect
@@ -399,9 +477,40 @@ libmosq_EXPORT int mosquitto_connect_async(struct mosquitto *mosq, const char *h
  *                     Windows.
  *
  * See Also:
- * 	<mosquitto_connect>, <mosquitto_disconnect>
+ * 	<mosquitto_connect>, <mosquitto_disconnect>, <mosquitto_reconnect_async>
  */
 libmosq_EXPORT int mosquitto_reconnect(struct mosquitto *mosq);
+
+/*
+ * Function: mosquitto_reconnect_async
+ *
+ * Reconnect to a broker. Non blocking version of <mosquitto_reconnect>.
+ *
+ * This function provides an easy way of reconnecting to a broker after a
+ * connection has been lost. It uses the values that were provided in the
+ * <mosquitto_connect> or <mosquitto_connect_async> calls. It must not be
+ * called before <mosquitto_connect>.
+ * 
+ * Parameters:
+ * 	mosq - a valid mosquitto instance.
+ *
+ * Returns:
+ * 	MOSQ_ERR_SUCCESS - on success.
+ * 	MOSQ_ERR_INVAL -   if the input parameters were invalid.
+ * 	MOSQ_ERR_NOMEM -   if an out of memory condition occurred.
+ *
+ * Returns:
+ * 	MOSQ_ERR_SUCCESS - on success.
+ * 	MOSQ_ERR_INVAL -   if the input parameters were invalid.
+ * 	MOSQ_ERR_ERRNO -   if a system call returned an error. The variable errno
+ *                     contains the error code, even on Windows.
+ *                     Use strerror_r() where available or FormatMessage() on
+ *                     Windows.
+ *
+ * See Also:
+ * 	<mosquitto_connect>, <mosquitto_disconnect>
+ */
+libmosq_EXPORT int mosquitto_reconnect_async(struct mosquitto *mosq);
 
 /*
  * Function: mosquitto_disconnect
@@ -448,6 +557,9 @@ libmosq_EXPORT int mosquitto_disconnect(struct mosquitto *mosq);
  *	MOSQ_ERR_PROTOCOL -     if there is a protocol error communicating with the
  *                          broker.
  * 	MOSQ_ERR_PAYLOAD_SIZE - if payloadlen is too large.
+ *
+ * See Also: 
+ *	<mosquitto_max_inflight_messages_set>
  */
 libmosq_EXPORT int mosquitto_publish(struct mosquitto *mosq, int *mid, const char *topic, int payloadlen, const void *payload, int qos, bool retain);
 
@@ -803,12 +915,39 @@ libmosq_EXPORT bool mosquitto_want_write(struct mosquitto *mosq);
  * 	MOSQ_ERR_NOMEM -   if an out of memory condition occurred.
  *
  * See Also:
- *	<mosquitto_tls_opts_set>, <mosquitto_tls_psk_set>
+ *	<mosquitto_tls_opts_set>, <mosquitto_tls_psk_set>, <mosquitto_tls_insecure_set>
  */
 libmosq_EXPORT int mosquitto_tls_set(struct mosquitto *mosq,
 		const char *cafile, const char *capath,
 		const char *certfile, const char *keyfile,
 		int (*pw_callback)(char *buf, int size, int rwflag, void *userdata));
+
+/*
+ * Function: mosquitto_tls_insecure_set
+ *
+ * Configure verification of the server hostname in the server certificate. If
+ * value is set to true, it is impossible to guarantee that the host you are
+ * connecting to is not impersonating your server. This can be useful in
+ * initial server testing, but makes it possible for a malicious third party to
+ * impersonate your server through DNS spoofing, for example.
+ * Do not use this function in a real system. Setting value to true makes the
+ * connection encryption pointless.
+ * Must be called before <mosquitto_connect>.
+ *
+ * Parameters:
+ *  mosq -  a valid mosquitto instance.
+ *  value - if set to false, the default, certificate hostname checking is
+ *          performed. If set to true, no hostname checking is performed and
+ *          the connection is insecure.
+ *
+ * Returns:
+ *	MOSQ_ERR_SUCCESS - on success.
+ * 	MOSQ_ERR_INVAL -   if the input parameters were invalid.
+ *
+ * See Also:
+ *	<mosquitto_tls_set>
+ */
+libmosq_EXPORT int mosquitto_tls_insecure_set(struct mosquitto *mosq, bool value);
 
 /*
  * Function: mosquitto_tls_opts_set
@@ -822,10 +961,14 @@ libmosq_EXPORT int mosquitto_tls_set(struct mosquitto *mosq,
  *	              * SSL_VERIFY_NONE (0): the server will not be verified in any way.
  *	              * SSL_VERIFY_PEER (1): the server certificate will be verified
  *	                and the connection aborted if the verification fails.
- *	              The default and recommended value is SSL_VERIFY_PEER.
+ *	              The default and recommended value is SSL_VERIFY_PEER. Using
+ *	              SSL_VERIFY_NONE provides no security.
  *	tls_version - the version of the SSL/TLS protocol to use as a string. If NULL,
- *	              the default value is used. Currently the only available
- *	              version is "tlsv1". 
+ *	              the default value is used. The default value and the
+ *	              available values depend on the version of openssl that the
+ *	              library was compiled against. For openssl >= 1.0.1, the
+ *	              available options are tlsv1.2, tlsv1.1 and tlsv1, with tlv1.2
+ *	              as the default. For openssl < 1.0.1, only tlsv1 is available.
  *	ciphers -     a string describing the ciphers available for use. See the
  *	              "openssl ciphers" tool for more information. If NULL, the
  *	              default ciphers will be used.
@@ -1013,6 +1156,60 @@ libmosq_EXPORT void mosquitto_unsubscribe_callback_set(struct mosquitto *mosq, v
  *	str -   the message string.
  */
 libmosq_EXPORT void mosquitto_log_callback_set(struct mosquitto *mosq, void (*on_log)(struct mosquitto *, void *, int, const char *));
+
+/*
+ * Function: mosquitto_reconnect_delay_set
+ *
+ * Control the behaviour of the client when it has unexpectedly disconnected in
+ * <mosquitto_loop_forever> or after <mosquitto_loop_start>. The default
+ * behaviour if this function is not used is to repeatedly attempt to reconnect
+ * with a delay of 1 second until the connection succeeds.
+ *
+ * Use reconnect_delay parameter to change the delay between successive
+ * reconnection attempts. You may also enable exponential backoff of the time
+ * between reconnections by setting reconnect_exponential_backoff to true and
+ * set an upper bound on the delay with reconnect_delay_max.
+ *
+ * Parameters:
+ *  mosq -                          a valid mosquitto instance.
+ *  reconnect_delay -               the number of seconds to wait between
+ *                                  reconnects.
+ *  reconnect_delay_max -           the maximum number of seconds to wait
+ *                                  between reconnects.
+ *  reconnect_exponential_backoff - use exponential backoff between
+ *                                  reconnect attempts. Set to true to enable
+ *                                  exponential backoff.
+ *
+ * Returns:
+ *	MOSQ_ERR_SUCCESS - on success.
+ * 	MOSQ_ERR_INVAL -   if the input parameters were invalid.
+ */
+libmosq_EXPORT int mosquitto_reconnect_delay_set(struct mosquitto *mosq, unsigned int reconnect_delay, unsigned int reconnect_delay_max, bool reconnect_exponential_backoff);
+
+/*
+ * Function: mosquitto_max_inflight_messages_set
+ *
+ * Set the number of QoS 1 and 2 messages that can be "in flight" at one time.
+ * An in flight message is part way through its delivery flow. Attempts to send
+ * further messages with <mosquitto_publish> will result in the messages being
+ * queued until the number of in flight messages reduces.
+ *
+ * A higher number here results in greater message throughput, but if set
+ * higher than the maximum in flight messages on the broker may lead to
+ * delays in the messages being acknowledged.
+ *
+ * Set to 0 for no maximum.
+ *
+ * Parameters:
+ *  mosq -                  a valid mosquitto instance.
+ *  max_inflight_messages - the maximum number of inflight messages. Defaults
+ *                          to 20.
+ *
+ * Returns:
+ *	MOSQ_ERR_SUCCESS - on success.
+ * 	MOSQ_ERR_INVAL -   if the input parameters were invalid.
+ */
+libmosq_EXPORT int mosquitto_max_inflight_messages_set(struct mosquitto *mosq, unsigned int max_inflight_messages);
 
 /*
  * Function: mosquitto_message_retry_set

@@ -132,6 +132,8 @@
 
 					<para>Example:</para>
 					<para><code>pattern write sensor/%u/data</code></para>
+					<para>Allow access for bridge connection messages:</para>
+					<para><code>pattern write $SYS/broker/connection/%c/state</code></para>
 
 					<para>If the first character of a line of the ACL file is a
 						# it is treated as a comment.</para>
@@ -256,13 +258,29 @@
 				<term><option>log_dest</option> <replaceable>destinations</replaceable></term>
 				<listitem>
 					<para>Send log messages to a particular destination.
-					Possible destinations are: stdout stderr syslog topic.
-					stdout and stderr log to the console on the named output.
-					syslog uses the userspace syslog facility which usually
-					ends up in /var/log/messages or similar and topic logs to the
-					broker topic '$SYS/broker/log/&lt;severity&gt;', where severity
-					is one of D, E, W, N, I which are debug, error, warning,
-					notice and information. Use "log_dest none" if you wish to
+						Possible destinations are: <option>stdout</option>
+						<option>stderr</option> <option>syslog</option>
+						<option>topic</option>.</para>
+					<para><option>stdout</option> and
+						<option>stderr</option> log to the console on the
+						named output.</para>
+					<para><option>syslog</option> uses the userspace syslog
+						facility which usually ends up in /var/log/messages or
+						similar and topic logs to the broker topic
+						'$SYS/broker/log/&lt;severity&gt;', where severity is
+						one of D, E, W, N, I, M which are debug, error,
+						warning, notice, information and message. Message type
+						severity is used by the subscribe and unsubscribe
+						log_type options and publishes log messages at
+						$SYS/broker/log/M/subscribe and
+						$SYS/broker/log/M/unsubscribe.</para>
+					<para>The <option>file</option> destination requires an
+						additional parameter which is the file to be logged to,
+						e.g. "log_dest file /var/log/mosquitto.log". The file
+						will be closed and reopened when the broker receives a
+						HUP signal. Only a single file destination may be
+						configured.</para>
+					<para>Use "log_dest none" if you wish to
 					disable logging. Defaults to stderr. This option
 					may be specified multiple times.</para>
 					<para>Note that if the broker is running as a Windows
@@ -283,11 +301,11 @@
 				<term><option>log_type</option> <replaceable>types</replaceable></term>
 				<listitem>
 					<para>Choose types of messages to log. Possible types are:
-					debug, error, warning, notice, information, none. Defaults
-					to error, warning, notice and information. This option may
-					be specified multiple times. Note that the debug type (used
-					for decoding incoming network packets) is never logged in
-					syslog or topics.</para>
+					debug, error, warning, notice, information, none, all.
+					Defaults to error, warning, notice and information. This
+					option may be specified multiple times. Note that the debug
+					type (used for decoding incoming/outgoing network packets)
+					is never logged in topics.</para>
 					<para>Reloaded on reload signal.</para>
 				</listitem>
 			</varlistentry>
@@ -311,6 +329,17 @@
 					flight. Defaults to 100. Set to 0 for no maximum (not
 					recommended). See also the queue_qos0_messages option.</para>
 					<para>Reloaded on reload signal.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>message_size_limit</option> <replaceable>limit</replaceable></term>
+				<listitem> 
+					<para>This option sets the maximum publish payload size
+						that the broker will allow. Received messages that
+						exceed this size will not be accepted by the broker.
+						The default value is 0, which means that all valid MQTT
+						messages are accepted. MQTT imposes a maximum payload
+						size of 268435455 bytes.</para>
 				</listitem>
 			</varlistentry>
 			<varlistentry>
@@ -474,6 +503,20 @@
 					$SYS subscription hierarchy, which provides status
 					information about the broker. If unset, defaults to 10
 					seconds.</para>
+					<para>Reloaded on reload signal.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>upgrade_outgoing_qos</option> [ true | false ]</term>
+				<listitem>
+					<para>The MQTT specification requires that the QoS of a
+						message delivered to a subscriber is never upgraded to
+						match the QoS of the subscription. Enabling this option
+						changes this behaviour. If upgrade_outgoing_qos is set
+						true, messages sent to a subscriber will always match
+						the QoS of its subscription. This is a non-standard
+						option not provided for by the spec. Defaults to
+						false.</para>
 					<para>Reloaded on reload signal.</para>
 				</listitem>
 			</varlistentry>
@@ -708,16 +751,17 @@
 		<para>Bridges cannot currently be reloaded on reload signal.</para>
 		<variablelist>
 			<varlistentry>
-				<term><option>address</option> <replaceable>address[:port]</replaceable></term>
-				<term><option>addresses</option> <replaceable>address[:port]</replaceable></term>
+				<term><option>address</option> <replaceable>address[:port]</replaceable> <replaceable>[address[:port]]</replaceable></term>
+				<term><option>addresses</option> <replaceable>address[:port]</replaceable> <replaceable>[address[:port]]</replaceable></term>
 				<listitem>
 					<para>Specify the address and optionally the port of the
 					bridge to connect to. This must be given for each bridge
 					connection. If the port is not specified, the default of
 					1883 is used.</para>
-					<para>Unlike rsmb, it is not currently possible to specify
-					multiple addresses for a single bridge connection
-					here. This is true even if the name "addresses" is used.</para>
+					<para>Multiple host addresses can be specified on the
+						address config. See the <option>round_robin</option>
+						option for more details on the behaviour of bridges
+						with multiple addresses.</para>
 				</listitem>
 			</varlistentry>
 			<varlistentry>
@@ -815,6 +859,25 @@
 				</listitem>
 			</varlistentry>
 			<varlistentry>
+				<term><option>round_robin</option> [ true | false ]</term>
+				<listitem>
+					<para>If the bridge has more than one address given in the
+						address/addresses configuration, the round_robin option
+						defines the behaviour of the bridge on a failure of the
+						bridge connection. If round_robin is false, the default
+						value, then the first address is treated as the main
+						bridge connection. If the connection fails, the other
+						secondary addresses will be attempted in turn. Whilst
+						connected to a secondary bridge, the bridge will
+						periodically attempt to reconnect to the main bridge
+						until successful.</para>
+					<para>If round_robin is true, then all addresses are
+						treated as equals. If a connection fails, the next
+						address will be tried and if successful will remain
+						connected until it fails.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
 				<term><option>start_type</option> [ automatic | lazy | once ]</term>
 				<listitem>
 					<para>Set the start type of the bridge. This controls how
@@ -867,13 +930,13 @@
 						local broker to be inserted into the topic tree of the
 						remote broker at an appropriate place.</para>
 					<para>For incoming topics, the bridge will prepend the
-						topic with the remote prefix and subscribe to the
+						pattern with the remote prefix and subscribe to the
 						resulting topic on the remote broker. When a matching
 						incoming message is received, the remote prefix will be
 						removed from the topic and then the local prefix
 						added.</para>
 					<para>For outgoing topics, the bridge will prepend the
-						topic with the local prefix and subscribe to the
+						pattern with the local prefix and subscribe to the
 						resulting topic on the local broker. When an outgoing
 						message is processed, the local prefix will be removed
 						from the topic then the remote prefix added.</para>
@@ -898,13 +961,16 @@
 								<row><entry>2</entry><entry>value</entry><entry>value</entry><entry>""</entry><entry>valid</entry></row>
 								<row><entry>3</entry><entry>value</entry><entry>""</entry><entry>value</entry><entry>valid</entry></row>
 								<row><entry>4</entry><entry>value</entry><entry>""</entry><entry>""</entry><entry>valid (no remapping)</entry></row>
-								<row><entry>5</entry><entry>""</entry><entry>value</entry><entry>value</entry><entry>valid (remap entire local topic to remote)</entry></row>
+								<row><entry>5</entry><entry>""</entry><entry>value</entry><entry>value</entry><entry>valid (remap single local topic to remote)</entry></row>
 								<row><entry>6</entry><entry>""</entry><entry>value</entry><entry>""</entry><entry>invalid</entry></row>
 								<row><entry>7</entry><entry>""</entry><entry>""</entry><entry>value</entry><entry>invalid</entry></row>
 								<row><entry>8</entry><entry>""</entry><entry>""</entry><entry>""</entry><entry>invalid</entry></row>
 							</tbody>
 						</tgroup>
 					</informaltable>
+					<para>To remap an entire topic tree, use e.g.:</para>
+					<programlisting language="config">
+topic # both 2 local/topic/ remote/topic/</programlisting>
 
 					<para>This option can be specified multiple times per
 					bridge.</para>
@@ -916,6 +982,21 @@
 					<para>See also the <option>cleansession</option> option if
 						you have messages arriving on unexpected topics when
 						using incoming topics.</para>
+
+					<example title="Bridge Topic Remapping" label="Bridge Topic Remapping">
+						<para>The configuration below connects a bridge to the
+							broker at <option>test.mosquitto.org</option>. It
+							subscribes to the remote topic
+							<option>$SYS/broker/clients/total</option> and
+							republishes the messages received to the local topic
+							<option>test/mosquitto/org/clients/total</option></para>
+						<programlisting language="config">
+connection test-mosquitto-org
+address test.mosquitto.org
+cleansession true
+topic clients/total in 0 test/mosquitto/org $SYS/broker/
+</programlisting></example>
+
 				</listitem>
 			</varlistentry>
 			<varlistentry>

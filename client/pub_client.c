@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2009-2012 Roger Light <roger@atchoo.org>
+Copyright (c) 2009-2013 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -215,17 +215,21 @@ void print_usage(void)
 	printf("mosquitto_pub is a simple mqtt client that will publish a message on a single topic and exit.\n");
 	printf("mosquitto_pub version %s running on libmosquitto %d.%d.%d.\n\n", VERSION, major, minor, revision);
 	printf("Usage: mosquitto_pub [-h host] [-p port] [-q qos] [-r] {-f file | -l | -n | -m message} -t topic\n");
+	printf("                     [-A bind_address]\n");
 	printf("                     [-i id] [-I id_prefix]\n");
 	printf("                     [-d] [--quiet]\n");
+	printf("                     [-M max_inflight]\n");
 	printf("                     [-u username [-P password]]\n");
 	printf("                     [--will-topic [--will-payload payload] [--will-qos qos] [--will-retain]]\n");
 #ifdef WITH_TLS
-	printf("                     [{--cafile file | --capath dir} [--cert file] [--key file]]\n");
+	printf("                     [{--cafile file | --capath dir} [--cert file] [--key file] [--insecure]]\n");
 #ifdef WITH_TLS_PSK
 	printf("                     [--psk hex-key --psk-identity identity]\n");
 #endif
 #endif
 	printf("       mosquitto_pub --help\n\n");
+	printf(" -A : bind the outgoing socket to this host/ip address. Use to control which interface\n");
+	printf("      the client communicates over.\n");
 	printf(" -d : enable debug messages.\n");
 	printf(" -f : send the contents of a file as the message.\n");
 	printf(" -h : mqtt host to connect to. Defaults to localhost.\n");
@@ -234,6 +238,7 @@ void print_usage(void)
 	printf("      broker is using the clientid_prefixes option.\n");
 	printf(" -l : read messages from stdin, sending a separate message for each line.\n");
 	printf(" -m : message payload to send.\n");
+	printf(" -M : the maximum inflight messages for QoS 1/2..\n");
 	printf(" -n : send a null (zero length) message.\n");
 	printf(" -p : network port to connect to. Defaults to 1883.\n");
 	printf(" -q : quality of service level to use for all messages. Defaults to 0.\n");
@@ -257,6 +262,12 @@ void print_usage(void)
 	printf("            communication.\n");
 	printf(" --cert : client certificate for authentication, if required by server.\n");
 	printf(" --key : client private key for authentication, if required by server.\n");
+	printf(" --tls-version : TLS protocol version, can be one of tlsv1.2 tlsv1.1 or tlsv1.\n");
+	printf("                 Defaults to tlsv1.2 if available.\n");
+	printf(" --insecure : do not check that the server certificate hostname matches the remote\n");
+	printf("              hostname. Using this option means that you cannot be sure that the\n");
+	printf("              remote host is the server you wish to connect to and so is insecure.\n");
+	printf("              Do not use this option in a production environment.\n");
 #ifdef WITH_TLS_PSK
 	printf(" --psk : pre-shared-key in hexadecimal (no leading 0x) to enable TLS-PSK mode.\n");
 	printf(" --psk-identity : client identity string for TLS-PSK mode.\n");
@@ -272,6 +283,7 @@ int main(int argc, char *argv[])
 	int i;
 	char *host = "localhost";
 	int port = 1883;
+	char *bind_address = NULL;
 	int keepalive = 60;
 	char buf[1024];
 	bool debug = false;
@@ -281,6 +293,7 @@ int main(int argc, char *argv[])
 	char hostname[256];
 	char err[1024];
 	int len;
+	unsigned int max_inflight = 20;
 
 	char *will_payload = NULL;
 	long will_payloadlen = 0;
@@ -288,10 +301,12 @@ int main(int argc, char *argv[])
 	bool will_retain = false;
 	char *will_topic = NULL;
 
+	bool insecure = false;
 	char *cafile = NULL;
 	char *capath = NULL;
 	char *certfile = NULL;
 	char *keyfile = NULL;
+	char *tls_version = NULL;
 
 	char *psk = NULL;
 	char *psk_identity = NULL;
@@ -309,6 +324,15 @@ int main(int argc, char *argv[])
 					print_usage();
 					return 1;
 				}
+			}
+			i++;
+		}else if(!strcmp(argv[i], "-A")){
+			if(i==argc-1){
+				fprintf(stderr, "Error: -A argument given but no address specified.\n\n");
+				print_usage();
+				return 1;
+			}else{
+				bind_address = argv[i+1];
 			}
 			i++;
 		}else if(!strcmp(argv[i], "--cafile")){
@@ -365,6 +389,8 @@ int main(int argc, char *argv[])
 				host = argv[i+1];
 			}
 			i++;
+		}else if(!strcmp(argv[i], "--insecure")){
+			insecure = true;
 		}else if(!strcmp(argv[i], "-i") || !strcmp(argv[i], "--id")){
 			if(id_prefix){
 				fprintf(stderr, "Error: -i and -I argument cannot be used together.\n\n");
@@ -423,6 +449,15 @@ int main(int argc, char *argv[])
 				message = argv[i+1];
 				msglen = strlen(message);
 				mode = MSGMODE_CMD;
+			}
+			i++;
+		}else if(!strcmp(argv[i], "-M")){
+			if(i==argc-1){
+				fprintf(stderr, "Error: -M argument given but max_inflight not specified.\n\n");
+				print_usage();
+				return 1;
+			}else{
+				max_inflight = atoi(argv[i+1]);
 			}
 			i++;
 		}else if(!strcmp(argv[i], "-n") || !strcmp(argv[i], "--null-message")){
@@ -484,6 +519,15 @@ int main(int argc, char *argv[])
 				return 1;
 			}else{
 				topic = argv[i+1];
+			}
+			i++;
+		}else if(!strcmp(argv[i], "--tls-version")){
+			if(i==argc-1){
+				fprintf(stderr, "Error: --tls-version argument given but no version specified.\n\n");
+				print_usage();
+				return 1;
+			}else{
+				tls_version = argv[i+1];
 			}
 			i++;
 		}else if(!strcmp(argv[i], "-u") || !strcmp(argv[i], "--username")){
@@ -637,16 +681,27 @@ int main(int argc, char *argv[])
 		mosquitto_lib_cleanup();
 		return 1;
 	}
+	if(insecure && mosquitto_tls_insecure_set(mosq, true)){
+		if(!quiet) fprintf(stderr, "Error: Problem setting TLS insecure option.\n");
+		mosquitto_lib_cleanup();
+		return 1;
+	}
 	if(psk && mosquitto_tls_psk_set(mosq, psk, psk_identity, NULL)){
 		if(!quiet) fprintf(stderr, "Error: Problem setting TLS-PSK options.\n");
 		mosquitto_lib_cleanup();
 		return 1;
 	}
+	if(tls_version && mosquitto_tls_opts_set(mosq, 1, tls_version, NULL)){
+		if(!quiet) fprintf(stderr, "Error: Problem setting TLS options.\n");
+		mosquitto_lib_cleanup();
+		return 1;
+	}
+	mosquitto_max_inflight_messages_set(mosq, max_inflight);
 	mosquitto_connect_callback_set(mosq, my_connect_callback);
 	mosquitto_disconnect_callback_set(mosq, my_disconnect_callback);
 	mosquitto_publish_callback_set(mosq, my_publish_callback);
 
-	rc = mosquitto_connect(mosq, host, port, keepalive);
+	rc = mosquitto_connect_bind(mosq, host, port, keepalive, bind_address);
 	if(rc){
 		if(!quiet){
 			if(rc == MOSQ_ERR_ERRNO){

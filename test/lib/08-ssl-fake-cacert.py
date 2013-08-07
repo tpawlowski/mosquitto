@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 import inspect
 import os
@@ -21,7 +21,7 @@ if sys.version < '2.7':
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-ssock = ssl.wrap_socket(sock, ca_certs="../ssl/test-ca.crt",
+ssock = ssl.wrap_socket(sock, ca_certs="../ssl/all-ca.crt",
         keyfile="../ssl/server.key", certfile="../ssl/server.crt",
         server_side=True, ssl_version=ssl.PROTOCOL_TLSv1, cert_reqs=ssl.CERT_REQUIRED)
 ssock.settimeout(10)
@@ -47,7 +47,10 @@ except ssl.SSLError:
     pass
 finally:
     time.sleep(1.0)
-    client.terminate()
+    try:
+        client.terminate()
+    except OSError:
+        pass
     client.wait()
     ssock.close()
 

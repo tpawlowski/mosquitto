@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 # Client connects without a certificate to a server that has use_identity_as_username=true. Should be rejected.
 import subprocess
@@ -30,8 +30,8 @@ try:
     time.sleep(0.5)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    ssock = ssl.wrap_socket(sock, ca_certs="../ssl/test-ca.crt", cert_reqs=ssl.CERT_REQUIRED)
-    ssock.settimeout(5)
+    ssock = ssl.wrap_socket(sock, ca_certs="../ssl/test-root-ca.crt", cert_reqs=ssl.CERT_REQUIRED)
+    ssock.settimeout(20)
     ssock.connect(("localhost", 1888))
     ssock.send(connect_packet)
 

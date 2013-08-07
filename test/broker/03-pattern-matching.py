@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 
 import subprocess
 import socket
@@ -36,7 +36,7 @@ def pattern_test(sub_topic, pub_topic):
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.connect(("localhost", 1888))
-        sock.settimeout(5)
+        sock.settimeout(20)
         sock.send(connect_packet)
 
         if mosq_test.expect_packet(sock, "connack", connack_packet):
@@ -70,6 +70,9 @@ pattern_test("#", "test/topic")
 pattern_test("#", "/test/topic")
 pattern_test("foo/#", "foo/bar/baz")
 pattern_test("foo/+/baz", "foo/bar/baz")
+pattern_test("foo/+/baz/#", "foo/bar/baz")
+pattern_test("foo/+/baz/#", "foo/bar/baz/bar")
+pattern_test("foo/foo/baz/#", "foo/foo/baz/bar")
 pattern_test("foo/#", "foo")
 pattern_test("/#", "/foo")
 pattern_test("test/topic/", "test/topic")

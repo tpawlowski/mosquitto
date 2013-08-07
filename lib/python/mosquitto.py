@@ -1,4 +1,4 @@
-# Copyright (c) 2012 Roger Light <roger@atchoo.org>
+# Copyright (c) 2012,2013 Roger Light <roger@atchoo.org>
 # All rights reserved.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -24,6 +24,13 @@
 # CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
+#
+#
+# This product includes software developed by the OpenSSL Project for use in
+# the OpenSSL Toolkit. (http://www.openssl.org/)
+# This product includes cryptographic software written by Eric Young
+# (eay@cryptsoft.com)
+# This product includes software written by Tim Hudson (tjh@cryptsoft.com)
 
 """
 This is an MQTT v3.1 client module. MQTT is a lightweight pub/sub messaging
@@ -225,7 +232,7 @@ def topic_matches_sub(sub, topic):
                 multilevel_wildcard = True
                 break
 
-    if multilevel_wildcard == False and (tpos < tlen or spos < slen):
+    if not multilevel_wildcard and (tpos < tlen or spos < slen):
         result = False
 
     return result
@@ -381,7 +388,7 @@ class Mosquitto:
         parameter to callbacks. It may be updated at a later point with the
         user_data_set() function.
         """
-        if clean_session == False and (client_id == "" or client_id == None):
+        if not clean_session and (client_id == "" or client_id == None):
             raise ValueError('A client id must be provided if clean session is False.')
 
         self._userdata = userdata
@@ -390,7 +397,7 @@ class Mosquitto:
         self._message_retry = 20
         self._last_retry_check = 0
         self._clean_session = clean_session
-        if client_id == "":
+        if client_id == "" or client_id == None:
             self._client_id = "mosq/" + "".join(random.choice("0123456789ADCDEF") for x in range(23-5))
         else:
             self._client_id = client_id
@@ -406,6 +413,8 @@ class Mosquitto:
         self._last_mid = 0
         self._state = mosq_cs_new
         self._messages = []
+        self._max_inflight_messages = 20
+        self._inflight_messages = 0
         self._will = False
         self._will_topic = ""
         self._will_payload = None
@@ -420,6 +429,7 @@ class Mosquitto:
         self.on_log = None
         self._host = ""
         self._port = 1883
+        self._bind_address = ""
         self._in_callback = False
         self._strict_protocol = False
         self._callback_mutex = threading.Lock()
@@ -427,6 +437,7 @@ class Mosquitto:
         self._out_packet_mutex = threading.Lock()
         self._current_out_packet_mutex = threading.Lock()
         self._msgtime_mutex = threading.Lock()
+        self._message_mutex = threading.Lock()
         self._thread = None
         self._thread_terminate = False
         self._ssl = None
@@ -435,6 +446,10 @@ class Mosquitto:
         self._tls_ca_certs = None
         self._tls_cert_reqs = None
         self._tls_ciphers = None
+        self._tls_insecure = False
+        self._reconnect_delay = 1
+        self._reconnect_delay_max = 1
+        self._reconnect_exponential_backoff = False
 
     def __del__(self):
         pass
@@ -518,7 +533,22 @@ class Mosquitto:
         self._tls_version = tls_version
         self._tls_ciphers = ciphers
 
-    def connect(self, host, port=1883, keepalive=60):
+    def tls_insecure_set(self, value):
+        """Configure verification of the server hostname in the server certificate.
+
+        If value is set to true, it is impossible to guarantee that the host
+        you are connecting to is not impersonating your server. This can be
+        useful in initial server testing, but makes it possible for a malicious
+        third party to impersonate your server through DNS spoofing, for
+        example.
+
+        Do not use this function in a real system. Setting value to true means
+        there is no point using encryption.
+        
+        Must be called before connect()."""
+        self._tls_insecure = value
+
+    def connect(self, host, port=1883, keepalive=60, bind_address=""):
         """Connect to a remote broker.
 
         host is the hostname or IP address of the remote broker.
@@ -529,10 +559,10 @@ class Mosquitto:
         broker. If no other messages are being exchanged, this controls the
         rate at which the client will send ping messages to the broker.
         """
-        self.connect_async(host, port, keepalive)
+        self.connect_async(host, port, keepalive, bind_address)
         return self.reconnect()
 
-    def connect_async(self, host, port=1883, keepalive=60):
+    def connect_async(self, host, port=1883, keepalive=60, bind_address=""):
         """Connect to a remote broker asynchronously. This is a non-blocking
         connect call that can be used with loop_start() to provide very quick
         start.
@@ -555,6 +585,7 @@ class Mosquitto:
         self._host = host
         self._port = port
         self._keepalive = keepalive
+        self._bind_address = bind_address
 
         self._state_mutex.acquire()
         self._state = mosq_cs_connect_async
@@ -597,9 +628,12 @@ class Mosquitto:
         # Put messages in progress in a valid state.
         self._messages_reconnect_reset()
 
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        # FIXME use create_connection here
-
+        try:
+            self._sock = socket.create_connection((self._host, self._port), source_address=(self._bind_address, 0))
+        except socket.error as err:
+            (msg) = err
+            if msg.errno != errno.EINPROGRESS:
+                raise
 
         if self._tls_ca_certs != None:
             self._ssl = ssl.wrap_socket(self._sock,
@@ -610,15 +644,11 @@ class Mosquitto:
                     ssl_version=self._tls_version,
                     ciphers=self._tls_ciphers)
 
-        try:
-            self.socket().connect((self._host, self._port))
-        except socket.error as err:
-            (msg) = err
-            if msg.errno == 1 and "ssl" in msg.strerror:
-                raise
-            if msg.errno != errno.EINPROGRESS:
-                print(msg)
-                return 1
+            if self._tls_insecure == False:
+                if sys.version_info[0] < 3 or (sys.version_info[0] == 3 and sys.version_info[1] < 2):
+                    self._tls_match_hostname()
+                else:
+                    ssl.match_hostname(self._ssl.getpeercert(), self._host)
 
         self._sock.setblocking(0)
 
@@ -707,9 +737,9 @@ class Mosquitto:
             raise ValueError('Invalid topic.')
         if qos<0 or qos>2:
             raise ValueError('Invalid QoS level.')
-        if isinstance(payload, str) == True or isinstance(payload, bytearray) == True:
+        if isinstance(payload, str) or isinstance(payload, bytearray):
             local_payload = payload
-        elif isinstance(payload, int) == True or isinstance(payload, float) == True:
+        elif isinstance(payload, int) or isinstance(payload, float):
             local_payload = str(payload)
         elif payload == None:
             local_payload = None
@@ -731,10 +761,6 @@ class Mosquitto:
             message = MosquittoMessage()
             message.timestamp = time.time()
             message.direction = mosq_md_out
-            if qos == 1:
-                message.state = mosq_ms_wait_puback
-            elif qos == 2:
-                message.state = mosq_ms_wait_pubrec
 
             message.mid = local_mid
             message.topic = topic
@@ -747,9 +773,20 @@ class Mosquitto:
             message.retain = retain
             message.dup = False
 
+            self._message_mutex.acquire()
             self._messages.append(message)
-            rc = self._send_publish(message.mid, message.topic, message.payload, message.qos, message.retain, message.dup)
-            return (rc, local_mid)
+            if self._max_inflight_messages == 0 or self._inflight_messages < self._max_inflight_messages:
+                self._inflight_messages = self._inflight_messages+1
+                if qos == 1:
+                    message.state = mosq_ms_wait_puback
+                elif qos == 2:
+                    message.state = mosq_ms_wait_pubrec
+                self._message_mutex.release()
+
+                rc = self._send_publish(message.mid, message.topic, message.payload, message.qos, message.retain, message.dup)
+                return (rc, local_mid)
+            self._message_mutex.release()
+            return (MOSQ_ERR_SUCCESS, local_mid)
 
     def username_pw_set(self, username, password=None):
         """Set a username and optionally a password for broker authentication.
@@ -765,12 +802,12 @@ class Mosquitto:
 
     def disconnect(self):
         """Disconnect a connected client from the broker."""
-        if self._sock == None and self._ssl == None:
-            return MOSQ_ERR_NO_CONN
-
         self._state_mutex.acquire()
         self._state = mosq_cs_disconnecting
         self._state_mutex.release()
+
+        if self._sock == None and self._ssl == None:
+            return MOSQ_ERR_NO_CONN
 
         return self._send_disconnect()
 
@@ -917,6 +954,13 @@ class Mosquitto:
 
         return MOSQ_ERR_SUCCESS
 
+    def max_inflight_messages_set(self, inflight):
+        """Set the maximum number of messages with QoS>0 that can be part way
+        through their network flow at once. Defaults to 20."""
+        if inflight < 0:
+            raise ValueError('Invalid inflight.')
+        self._max_inflight_messages = inflight
+
     def message_retry_set(self, retry):
         """Set the timeout in seconds before a message with QoS>0 is retried.
         20 seconds by default."""
@@ -924,6 +968,18 @@ class Mosquitto:
             raise ValueError('Invalid retry.')
 
         self._message_retry = retry
+
+    def reconnect_delay_set(self, delay, delay_max, exponential_backoff):
+        if not isinstance(delay, int) or delay <= 0:
+            ValueError("delay must be a positive integer.")
+        if not isinstance(delay_max, int) or delay_max < delay:
+            ValueError("delay_max must be a integer and greater than delay.")
+        if not isinstance(exponential_backoff, bool):
+            ValueError("exponential_backoff must be a bool.")
+
+        self._reconnect_delay = delay
+        self._reconnect_delay_max = delay_max
+        self._reconnect_exponential_backoff = exponential_backoff
 
     def user_data_set(self, userdata):
         """Set the user data variable passed to callbacks. May be any data type."""
@@ -951,9 +1007,9 @@ class Mosquitto:
             raise ValueError('Invalid topic.')
         if qos<0 or qos>2:
             raise ValueError('Invalid QoS level.')
-        if isinstance(payload, str) == True or isinstance(payload, bytearray) == True:
+        if isinstance(payload, str) or isinstance(payload, bytearray):
             self._will_payload = payload
-        elif isinstance(payload, int) == True or isinstance(payload, float) == True:
+        elif isinstance(payload, int) or isinstance(payload, float):
             self._will_payload = str(payload)
         elif payload == None:
             self._will_payload = None
@@ -990,20 +1046,45 @@ class Mosquitto:
         loop_forever() will handle reconnecting for you. If you call
         disconnect() in a callback it will return."""
 
+        reconnects = 0
         run = True
         if self._state == mosq_cs_connect_async:
             self.reconnect()
 
-        while run == True:
+        while run:
             rc = MOSQ_ERR_SUCCESS
             while rc == MOSQ_ERR_SUCCESS:
                 rc = self.loop(timeout, max_packets)
+                if self._thread_terminate:
+                    rc = 1
+                    run = False
+                if rc == MOSQ_ERR_SUCCESS:
+                    reconnects = 0
 
+            self._state_mutex.acquire()
             if self._state == mosq_cs_disconnecting:
                 run = False
+                self._state_mutex.release()
             else:
-                time.sleep(1)
-                self.reconnect()
+                self._state_mutex.release()
+                reconnect_delay = self._reconnect_delay
+                if reconnect_delay > 0 and self._reconnect_exponential_backoff:
+                    reconnect_delay = reconnect_delay * self._reconnect_delay*reconnects*reconnects
+
+                if reconnect_delay > self._reconnect_delay_max:
+                    reconnect_delay = self._reconnect_delay_max
+                else:
+                    reconnects = reconnects + 1
+
+                time.sleep(reconnect_delay)
+
+                self._state_mutex.acquire()
+                if self._state == mosq_cs_disconnecting:
+                    run = False
+                    self._state_mutex.release()
+                else:
+                    self._state_mutex.release()
+                    self.reconnect()
         return rc
 
     def loop_start(self):
@@ -1084,8 +1165,7 @@ class Mosquitto:
                     return MOSQ_ERR_AGAIN
                 if msg.errno == errno.EAGAIN:
                     return MOSQ_ERR_AGAIN
-                print(msg)
-                return 1
+                raise
             else:
                 if len(command) == 0:
                     return 1
@@ -1108,8 +1188,7 @@ class Mosquitto:
                         return MOSQ_ERR_AGAIN
                     if msg.errno == errno.EAGAIN:
                         return MOSQ_ERR_AGAIN
-                    print(msg)
-                    return 1
+                    raise
                 else:
                     byte = struct.unpack("!B", byte)
                     byte = byte[0]
@@ -1140,8 +1219,7 @@ class Mosquitto:
                     return MOSQ_ERR_AGAIN
                 if msg.errno == errno.EAGAIN:
                     return MOSQ_ERR_AGAIN
-                print(msg)
-                return 1
+                raise
             else:
                 self._in_packet.to_process = self._in_packet.to_process - len(data)
                 self._in_packet.packet = self._in_packet.packet + data
@@ -1179,8 +1257,7 @@ class Mosquitto:
                     return MOSQ_ERR_AGAIN
                 if msg.errno == errno.EAGAIN:
                     return MOSQ_ERR_AGAIN
-                print(msg)
-                return 1
+                raise
 
             if write_length > 0:
                 packet.to_process = packet.to_process - write_length
@@ -1332,10 +1409,10 @@ class Mosquitto:
         packet.extend(struct.pack("!B", command))
         if payload == None:
             remaining_length = 2+len(topic)
-            self._easy_log(MOSQ_LOG_DEBUG, "Sending PUBLISH (d"+str(dup)+", q"+str(qos)+", r"+str(retain)+", m"+str(mid)+", '"+topic+"' (NULL payload)")
+            self._easy_log(MOSQ_LOG_DEBUG, "Sending PUBLISH (d"+str(dup)+", q"+str(qos)+", r"+str(int(retain))+", m"+str(mid)+", '"+topic+"' (NULL payload)")
         else:
             remaining_length = 2+len(topic) + len(payload)
-            self._easy_log(MOSQ_LOG_DEBUG, "Sending PUBLISH (d"+str(dup)+", q"+str(qos)+", r"+str(retain)+", m"+str(mid)+", '"+topic+"', ... ("+str(len(payload))+" bytes)")
+            self._easy_log(MOSQ_LOG_DEBUG, "Sending PUBLISH (d"+str(dup)+", q"+str(qos)+", r"+str(int(retain))+", m"+str(mid)+", '"+topic+"', ... ("+str(len(payload))+" bytes)")
 
         if qos > 0:
             # For message id
@@ -1398,7 +1475,11 @@ class Mosquitto:
             connect_flags = connect_flags | 0x02
 
         if self._will:
-            remaining_length = remaining_length + 2+len(self._will_topic) + 2+len(self._will_payload)
+            if self._will_payload != None:
+                remaining_length = remaining_length + 2+len(self._will_topic) + 2+len(self._will_payload)
+            else:
+                remaining_length = remaining_length + 2+len(self._will_topic) + 2
+
             connect_flags = connect_flags | 0x04 | ((self._will_qos&0x03) << 3) | ((self._will_retain&0x01) << 5)
 
         if self._username:
@@ -1418,10 +1499,10 @@ class Mosquitto:
 
         if self._will:
             self._pack_str16(packet, self._will_topic)
-            if len(self._will_payload) > 0:
-                self._pack_str16(packet, self._will_payload)
-            else:
+            if self._will_payload == None or len(self._will_payload) == 0:
                 packet.extend(struct.pack("!H", 0))
+            else:
+                self._pack_str16(packet, self._will_payload)
 
         if self._username:
             self._pack_str16(packet, self._username)
@@ -1442,7 +1523,6 @@ class Mosquitto:
         packet.extend(struct.pack("!B", command))
         self._pack_remaining_length(packet, remaining_length)
         local_mid = self._mid_generate()
-        pack_format = "!HH" + str(len(topic)) + "sB"
         packet.extend(struct.pack("!H", local_mid))
         self._pack_str16(packet, topic)
         packet.extend(struct.pack("B", topic_qos))
@@ -1455,21 +1535,24 @@ class Mosquitto:
         packet.extend(struct.pack("!B", command))
         self._pack_remaining_length(packet, remaining_length)
         local_mid = self._mid_generate()
-        pack_format = "!HH" + str(len(topic)) + "sB"
         packet.extend(struct.pack("!H", local_mid))
         self._pack_str16(packet, topic)
         return (self._packet_queue(command, packet, local_mid, 1), local_mid)
 
     def _message_update(self, mid, direction, state):
+        self._message_mutex.acquire()
         for m in self._messages:
             if m.mid == mid and m.direction == direction:
                 m.state = state
                 m.timestamp = time.time()
+                self._message_mutex.release()
                 return MOSQ_ERR_SUCCESS
 
+        self._message_mutex.release()
         return MOSQ_ERR_NOT_FOUND
 
     def _message_retry_check(self):
+        self._message_mutex.acquire()
         now = time.time()
         for m in self._messages:
             if m.timestamp + self._message_retry < now:
@@ -1485,30 +1568,41 @@ class Mosquitto:
                     m.timestamp = now
                     m.dup = True
                     self._send_pubrel(m.mid, True)
+        self._message_mutex.release()
 
     def _messages_reconnect_reset(self):
+        self._message_mutex.acquire()
         for m in self._messages:
             m.timestamp = 0
             if m.direction == mosq_md_out:
-                if m.qos == 1:
-                    m.state = mosq_ms_wait_puback
-                elif m.qos == 2:
-                    m.state = mosq_ms_wait_pubrec
+                if self._max_inflight_messages == 0 or self._inflight_messages < self._max_inflight_messages:
+                    if m.qos == 1:
+                        m.state = mosq_ms_wait_puback
+                    elif m.qos == 2:
+                        # Preserve current state
+                        pass
+                else:
+                    m.state = mosq_ms_invalid
             else:
-                self._messages.pop(self._messages.index(m))
+                if m.qos != 2:
+                    self._messages.pop(self._messages.index(m))
+                else:
+                    # Preserve current state
+                    pass
+        self._message_mutex.release()
 
     def _packet_queue(self, command, packet, mid, qos):
         mpkt = MosquittoPacket(command, packet, mid, qos)
 
         self._out_packet_mutex.acquire()
         self._out_packet.append(mpkt)
-        if self._current_out_packet_mutex.acquire(False) == True:
+        if self._current_out_packet_mutex.acquire(False):
             if self._current_out_packet == None and len(self._out_packet) > 0:
                 self._current_out_packet = self._out_packet.pop(0)
             self._current_out_packet_mutex.release()
         self._out_packet_mutex.release()
 
-        if self._in_callback == False:
+        if not self._in_callback and self._thread == None:
             return self.loop_write()
         else:
             return MOSQ_ERR_SUCCESS
@@ -1654,7 +1748,9 @@ class Mosquitto:
         elif message.qos == 2:
             rc = self._send_pubrec(message.mid)
             message.state = mosq_ms_wait_pubrel
+            self._message_mutex.acquire()
             self._messages.append(message)
+            self._message_mutex.release()
             return rc
         else:
             return MOSQ_ERR_PROTOCOL
@@ -1671,6 +1767,7 @@ class Mosquitto:
         mid = mid[0]
         self._easy_log(MOSQ_LOG_DEBUG, "Received PUBREL (Mid: "+str(mid)+")")
         
+        self._message_mutex.acquire()
         for i in range(len(self._messages)):
             if self._messages[i].direction == mosq_md_in and self._messages[i].mid == mid:
 
@@ -1683,9 +1780,34 @@ class Mosquitto:
                     self._in_callback = False
                 self._callback_mutex.release()
                 self._messages.pop(i)
+                self._inflight_messages = self._inflight_messages - 1
+                if self._max_inflight_messages > 0:
+                    rc = self._update_inflight()
+                    if rc != MOSQ_ERR_SUCCESS:
+                        self._message_mutex.release()
+                        return rc
 
+                self._message_mutex.release()
                 return self._send_pubcomp(mid)
 
+        self._message_mutex.release()
+        return MOSQ_ERR_SUCCESS
+
+    def _update_inflight(self):
+        # Dont lock message_mutex here
+        for m in self._messages:
+            if self._inflight_messages < self._max_inflight_messages:
+                if m.qos > 0 and m.state == mosq_ms_invalid and m.direction == mosq_md_out:
+                    self._inflight_messages = self._inflight_messages + 1
+                    if m.qos == 1:
+                        m.state = mosq_ms_wait_puback
+                    elif m.qos == 2:
+                        m.state = mosq_ms_wait_pubrec
+                    rc = self._send_publish(m.mid, m.topic, m.payload, m.qos, m.retain, m.dup)
+                    if rc != 0:
+                        return rc
+            else:
+                return MOSQ_ERR_SUCCESS
         return MOSQ_ERR_SUCCESS
 
     def _handle_pubrec(self):
@@ -1697,12 +1819,15 @@ class Mosquitto:
         mid = mid[0]
         self._easy_log(MOSQ_LOG_DEBUG, "Received PUBREC (Mid: "+str(mid)+")")
         
-        for i in range(len(self._messages)):
-            if self._messages[i].direction == mosq_md_out and self._messages[i].mid == mid:
-                self._messages[i].state = mosq_ms_wait_pubcomp
-                self._messages[i].timestamp = time.time()
+        self._message_mutex.acquire()
+        for m in self._messages:
+            if m.direction == mosq_md_out and m.mid == mid:
+                m.state = mosq_ms_wait_pubcomp
+                m.timestamp = time.time()
+                self._message_mutex.release()
                 return self._send_pubrel(mid, False)
         
+        self._message_mutex.release()
         return MOSQ_ERR_SUCCESS
 
     def _handle_unsuback(self):
@@ -1730,6 +1855,7 @@ class Mosquitto:
         mid = mid[0]
         self._easy_log(MOSQ_LOG_DEBUG, "Received "+cmd+" (Mid: "+str(mid)+")")
         
+        self._message_mutex.acquire()
         for i in range(len(self._messages)):
             try:
                 if self._messages[i].direction == mosq_md_out and self._messages[i].mid == mid:
@@ -1742,15 +1868,23 @@ class Mosquitto:
 
                     self._callback_mutex.release()
                     self._messages.pop(i)
+                    self._inflight_messages = self._inflight_messages - 1
+                    if self._max_inflight_messages > 0:
+                        rc = self._update_inflight()
+                        if rc != MOSQ_ERR_SUCCESS:
+                            self._message_mutex.release()
+                            return rc
+                    self._message_mutex.release()
+                    return MOSQ_ERR_SUCCESS
             except IndexError:
                 # Have removed item so i>count.
                 # Not really an error.
                 pass
 
+        self._message_mutex.release()
         return MOSQ_ERR_SUCCESS
 
     def _thread_main(self):
-        run = True
         self._thread_terminate = False
         self._state_mutex.acquire()
         if self._state == mosq_cs_connect_async:
@@ -1759,20 +1893,28 @@ class Mosquitto:
         else:
             self._state_mutex.release()
 
-        while run == True:
-            rc = MOSQ_ERR_SUCCESS
-            while rc == MOSQ_ERR_SUCCESS:
-                rc = self.loop()
-                if self._thread_terminate == True:
-                    rc = 1
-                    run = False
+        self.loop_forever()
 
-            self._state_mutex.acquire()
-            if self._state == mosq_cs_disconnecting:
-                run = False
-                self._state_mutex.release()
-            else:
-                self._state_mutex.release()
-                time.sleep(1)
-                self.reconnect()
+    def _tls_match_hostname(self):
+        cert = self._ssl.getpeercert()
+        san = cert.get('subjectAltName')
+        if san:
+            have_san_dns = False
+            for ((key,value),) in san:
+                if key == 'DNS':
+                    have_san_dns = True
+                    if value == self._host:
+                        return
+
+            if have_san_dns:
+                # Only check subject if subjectAltName dns not found.
+                raise ssl.SSLError('Certificate subject does not match remote hostname.')
+        subject = cert.get('subject')
+        if subject:
+            for ((key,value),) in subject:
+                if key == 'commonName':
+                    if value == self._host:
+                        return
+
+        raise ssl.SSLError('Certificate subject does not match remote hostname.')
 

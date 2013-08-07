@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2009-2012 Roger Light <roger@atchoo.org>
+Copyright (c) 2009-2013 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -31,16 +31,13 @@ POSSIBILITY OF SUCH DAMAGE.
 #define MQTT3_H
 
 #include <config.h>
+#include <stdio.h>
 
 #include <mosquitto_internal.h>
 #include <mosquitto_plugin.h>
 #include <mosquitto.h>
+#include "tls_mosq.h"
 #include "uthash.h"
-
-#ifdef WITH_TLS
-#  include <openssl/ssl.h>
-#endif
-#include <time.h>
 
 #ifndef __GNUC__
 #define __attribute__(attrib)
@@ -56,21 +53,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #define MQTT3_LOG_ALL 0xFF
 
 typedef uint64_t dbid_t;
-
-enum mqtt3_msg_state {
-	ms_invalid = 0,
-	ms_publish_qos0 = 1,
-	ms_publish_qos1 = 2,
-	ms_wait_for_puback = 3,
-	ms_publish_qos2 = 4,
-	ms_wait_for_pubrec = 5,
-	ms_resend_pubrel = 6,
-	ms_wait_for_pubrel = 7,
-	ms_resend_pubcomp = 8,
-	ms_wait_for_pubcomp = 9,
-	ms_send_pubrec = 10,
-	ms_queued = 11
-};
 
 struct _mqtt3_listener {
 	int fd;
@@ -92,6 +74,7 @@ struct _mqtt3_listener {
 	SSL_CTX *ssl_ctx;
 	char *crlfile;
 	bool use_identity_as_username;
+	char *tls_version;
 #endif
 };
 
@@ -111,19 +94,24 @@ struct mqtt3_config {
 	int log_dest;
 	int log_type;
 	bool log_timestamp;
+	char *log_file;
+	FILE *log_fptr;
+	int message_size_limit;
 	char *password_file;
 	bool persistence;
 	char *persistence_location;
 	char *persistence_file;
 	char *persistence_filepath;
 	time_t persistent_client_expiration;
+	char *pid_file;
 	char *psk_file;
 	bool queue_qos0_messages;
 	int retry_interval;
 	int store_clean_interval;
 	int sys_interval;
-	char *pid_file;
+	bool upgrade_outgoing_qos;
 	char *user;
+	bool verbose;
 #ifdef WITH_BRIDGE
 	struct _mqtt3_bridge *bridges;
 	int bridge_count;
@@ -167,7 +155,7 @@ struct mosquitto_client_msg{
 	bool retain;
 	time_t timestamp;
 	enum mosquitto_msg_direction direction;
-	enum mqtt3_msg_state state;
+	enum mosquitto_msg_state state;
 	bool dup;
 };
 
@@ -203,9 +191,17 @@ struct _mosquitto_auth_plugin{
 	int (*plugin_cleanup)(void *user_data, struct mosquitto_auth_opt *auth_opts, int auth_opt_count);
 	int (*security_init)(void *user_data, struct mosquitto_auth_opt *auth_opts, int auth_opt_count, bool reload);
 	int (*security_cleanup)(void *user_data, struct mosquitto_auth_opt *auth_opts, int auth_opt_count, bool reload);
-	int (*acl_check)(void *user_data, const char *username, const char *topic, int access);
+	int (*acl_check)(void *user_data, const char *clientid, const char *username, const char *topic, int access);
 	int (*unpwd_check)(void *user_data, const char *username, const char *password);
 	int (*psk_key_get)(void *user_data, const char *hint, const char *identity, char *key, int max_key_len);
+};
+
+struct _clientid_index_hash{
+	/* this is the key */
+	char *id;
+	/* this is the index where the client ID exists in the db->contexts array */
+	int db_context_index;
+	UT_hash_handle hh;
 };
 
 struct mosquitto_db{
@@ -216,6 +212,7 @@ struct mosquitto_db{
 	struct _mosquitto_acl *acl_patterns;
 	struct _mosquitto_unpwd *psk_id;
 	struct mosquitto **contexts;
+	struct _clientid_index_hash *clientid_index_hash;
 	int context_count;
 	struct mosquitto_msg_store *msg_store;
 	int msg_store_count;
@@ -249,11 +246,19 @@ struct _mqtt3_bridge_topic{
 	char *remote_topic; /* topic prefixed with remote_prefix */
 };
 
+struct bridge_address{
+	char *address;
+	int port;
+};
+
 struct _mqtt3_bridge{
 	char *name;
-	char *address;
+	struct bridge_address *addresses;
+	int cur_address;
+	int address_count;
+	time_t primary_retry;
+	bool round_robin;
 	char *clientid;
-	uint16_t port;
 	int keepalive;
 	bool clean_session;
 	struct _mqtt3_bridge_topic *topics;
@@ -268,6 +273,7 @@ struct _mqtt3_bridge{
 	int idle_timeout;
 	int restart_timeout;
 	int threshold;
+	bool lazy_reconnect;
 	bool try_private;
 	bool try_private_accepted;
 #ifdef WITH_TLS
@@ -275,7 +281,9 @@ struct _mqtt3_bridge{
 	char *tls_capath;
 	char *tls_certfile;
 	char *tls_keyfile;
-#  ifdef WITH_TLS_PSK
+	bool tls_insecure;
+	char *tls_version;
+#  ifdef REAL_WITH_TLS_PSK
 	char *tls_psk_identity;
 	char *tls_psk;
 #  endif
@@ -345,7 +353,7 @@ int mqtt3_db_message_count(int *count);
 int mqtt3_db_message_delete(struct mosquitto *context, uint16_t mid, enum mosquitto_msg_direction dir);
 int mqtt3_db_message_insert(struct mosquitto_db *db, struct mosquitto *context, uint16_t mid, enum mosquitto_msg_direction dir, int qos, bool retain, struct mosquitto_msg_store *stored);
 int mqtt3_db_message_release(struct mosquitto_db *db, struct mosquitto *context, uint16_t mid, enum mosquitto_msg_direction dir);
-int mqtt3_db_message_update(struct mosquitto *context, uint16_t mid, enum mosquitto_msg_direction dir, enum mqtt3_msg_state state);
+int mqtt3_db_message_update(struct mosquitto *context, uint16_t mid, enum mosquitto_msg_direction dir, enum mosquitto_msg_state state);
 int mqtt3_db_message_write(struct mosquitto *context);
 int mqtt3_db_messages_delete(struct mosquitto *context);
 int mqtt3_db_messages_easy_queue(struct mosquitto_db *db, struct mosquitto *context, const char *topic, int qos, uint32_t payloadlen, const void *payload, int retain);

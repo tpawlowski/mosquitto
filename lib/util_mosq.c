@@ -1,5 +1,5 @@
 /*
-Copyright (c) 2009-2012 Roger Light <roger@atchoo.org>
+Copyright (c) 2009-2013 Roger Light <roger@atchoo.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -29,24 +29,22 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include <assert.h>
 #include <string.h>
-#include <time.h>
 
 #ifdef WIN32
 #include <winsock2.h>
 #endif
 
-#if defined(WITH_TLS) && defined(WITH_TLS_PSK)
-#include <openssl/ssl.h>
-#endif
 
-#include <mosquitto.h>
-#include <memory_mosq.h>
-#include <net_mosq.h>
-#include <send_mosq.h>
-#include <util_mosq.h>
+#include "mosquitto.h"
+#include "memory_mosq.h"
+#include "net_mosq.h"
+#include "send_mosq.h"
+#include "time_mosq.h"
+#include "tls_mosq.h"
+#include "util_mosq.h"
 
 #ifdef WITH_BROKER
-#include <mosquitto_broker.h>
+#include "mosquitto_broker.h"
 #endif
 
 int _mosquitto_packet_alloc(struct _mosquitto_packet *packet)
@@ -88,7 +86,7 @@ void _mosquitto_check_keepalive(struct mosquitto *mosq)
 {
 	time_t last_msg_out;
 	time_t last_msg_in;
-	time_t now = time(NULL);
+	time_t now = mosquitto_time();
 #ifndef WITH_BROKER
 	int rc;
 #endif
@@ -300,7 +298,7 @@ int mosquitto_topic_matches_sub(const char *sub, const char *topic, bool *result
 	return MOSQ_ERR_SUCCESS;
 }
 
-#if defined(WITH_TLS) && defined(WITH_TLS_PSK)
+#ifdef REAL_WITH_TLS_PSK
 int _mosquitto_hex2bin(const char *hex, unsigned char *bin, int bin_max_len)
 {
 	BIGNUM *bn = NULL;
@@ -320,3 +318,20 @@ int _mosquitto_hex2bin(const char *hex, unsigned char *bin, int bin_max_len)
 	return len;
 }
 #endif
+
+FILE *_mosquitto_fopen(const char *path, const char *mode)
+{
+#ifdef WIN32
+	char buf[MAX_PATH];
+	int rc;
+	rc = ExpandEnvironmentStrings(path, buf, MAX_PATH);
+	if(rc == 0 || rc == MAX_PATH){
+		return NULL;
+	}else{
+		return fopen(buf, mode);
+	}
+#else
+	return fopen(path, mode);
+#endif
+}
+
