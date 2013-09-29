@@ -37,6 +37,7 @@ This is an MQTT v3.1 client module. MQTT is a lightweight pub/sub messaging
 protocol that is easy to implement and suitable for low powered devices.
 """
 import errno
+import platform
 import random
 import select
 import socket
@@ -45,6 +46,11 @@ import struct
 import sys
 import threading
 import time
+
+if platform.system() == 'Windows':
+    EAGAIN = errno.WSAEWOULDBLOCK
+else:
+    EAGAIN = errno.EAGAIN
 
 if sys.version_info[0] < 3:
     PROTOCOL_NAME = "MQIsdp"
@@ -581,6 +587,9 @@ class Mosquitto:
             raise ValueError('Invalid port number.')
         if keepalive < 0:
             raise ValueError('Keepalive must be >=0.')
+        if bind_address != "" and bind_address != None:
+            if (sys.version_info[0] == 2 and sys.version_info[1] < 7) or (sys.version_info[0] == 3 and sys.version_info[1] < 2):
+                raise ValueError('bind_address requires Python 2.7 or 3.2.')
 
         self._host = host
         self._port = port
@@ -629,7 +638,10 @@ class Mosquitto:
         self._messages_reconnect_reset()
 
         try:
-            self._sock = socket.create_connection((self._host, self._port), source_address=(self._bind_address, 0))
+            if (sys.version_info[0] == 2 and sys.version_info[1] < 7) or (sys.version_info[0] == 3 and sys.version_info[1] < 2):
+                self._sock = socket.create_connection((self._host, self._port), source_address=(self._bind_address, 0))
+            else:
+                self._sock = socket.create_connection((self._host, self._port))
         except socket.error as err:
             (msg) = err
             if msg.errno != errno.EINPROGRESS:
@@ -1084,7 +1096,10 @@ class Mosquitto:
                     self._state_mutex.release()
                 else:
                     self._state_mutex.release()
-                    self.reconnect()
+                    try:
+                        self.reconnect()
+                    except socket.error as err:
+                        pass
         return rc
 
     def loop_start(self):
@@ -1163,7 +1178,7 @@ class Mosquitto:
                 (msg) = err
                 if self._ssl and (msg.errno == ssl.SSL_ERROR_WANT_READ or msg.errno == ssl.SSL_ERROR_WANT_WRITE):
                     return MOSQ_ERR_AGAIN
-                if msg.errno == errno.EAGAIN:
+                if msg.errno == EAGAIN:
                     return MOSQ_ERR_AGAIN
                 raise
             else:
@@ -1186,7 +1201,7 @@ class Mosquitto:
                     (msg) = err
                     if self._ssl and (msg.errno == ssl.SSL_ERROR_WANT_READ or msg.errno == ssl.SSL_ERROR_WANT_WRITE):
                         return MOSQ_ERR_AGAIN
-                    if msg.errno == errno.EAGAIN:
+                    if msg.errno == EAGAIN:
                         return MOSQ_ERR_AGAIN
                     raise
                 else:
@@ -1217,7 +1232,7 @@ class Mosquitto:
                 (msg) = err
                 if self._ssl and (msg.errno == ssl.SSL_ERROR_WANT_READ or msg.errno == ssl.SSL_ERROR_WANT_WRITE):
                     return MOSQ_ERR_AGAIN
-                if msg.errno == errno.EAGAIN:
+                if msg.errno == EAGAIN:
                     return MOSQ_ERR_AGAIN
                 raise
             else:
@@ -1255,7 +1270,7 @@ class Mosquitto:
                 (msg) = err
                 if self._ssl and (msg.errno == ssl.SSL_ERROR_WANT_READ or msg.errno == ssl.SSL_ERROR_WANT_WRITE):
                     return MOSQ_ERR_AGAIN
-                if msg.errno == errno.EAGAIN:
+                if msg.errno == EAGAIN:
                     return MOSQ_ERR_AGAIN
                 raise
 
@@ -1900,10 +1915,14 @@ class Mosquitto:
         san = cert.get('subjectAltName')
         if san:
             have_san_dns = False
-            for ((key,value),) in san:
+            for ((key,value)) in san:
                 if key == 'DNS':
                     have_san_dns = True
                     if value == self._host:
+                        return
+                if key == 'IP Address':
+                    have_san_dns = True
+                    if value.lower() == self._host.lower():
                         return
 
             if have_san_dns:
@@ -1913,7 +1932,7 @@ class Mosquitto:
         if subject:
             for ((key,value),) in subject:
                 if key == 'commonName':
-                    if value == self._host:
+                    if value.lower() == self._host.lower():
                         return
 
         raise ssl.SSLError('Certificate subject does not match remote hostname.')
