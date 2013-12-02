@@ -544,7 +544,10 @@ static int _aclfile_parse(struct mosquitto_db *db)
 				}else{
 					rc = _add_acl_pattern(db, topic, access);
 				}
-				if(rc) return rc;
+				if(rc){
+					fclose(aclfile);
+					return rc;
+				}
 			}else if(!strcmp(token, "user")){
 				token = strtok_r(NULL, " ", &saveptr);
 				if(token){
@@ -653,6 +656,7 @@ static int _pwfile_parse(const char *file, struct _mosquitto_unpwd **root)
 				}
 				unpwd->username = _mosquitto_strdup(username);
 				if(!unpwd->username){
+					_mosquitto_free(unpwd);
 					fclose(pwfile);
 					return MOSQ_ERR_NOMEM;
 				}
@@ -666,6 +670,8 @@ static int _pwfile_parse(const char *file, struct _mosquitto_unpwd **root)
 					unpwd->password = _mosquitto_strdup(password);
 					if(!unpwd->password){
 						fclose(pwfile);
+						_mosquitto_free(unpwd->username);
+						_mosquitto_free(unpwd);
 						return MOSQ_ERR_NOMEM;
 					}
 					len = strlen(unpwd->password);

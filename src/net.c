@@ -139,20 +139,63 @@ int mqtt3_socket_accept(struct mosquitto_db *db, int listensock)
 			for(j=0; j<db->config->listeners[i].sock_count; j++){
 				if(db->config->listeners[i].socks[j] == listensock){
 					new_context->listener = &db->config->listeners[i];
+					new_context->listener->client_count++;
 					break;
 				}
 			}
 		}
 		if(!new_context->listener){
-			COMPAT_CLOSE(new_sock);
+			mqtt3_context_cleanup(NULL, new_context, true);
 			return -1;
 		}
 
-		if(new_context->listener->max_connections > 0 && new_context->listener->client_count >= new_context->listener->max_connections){
+		if(new_context->listener->max_connections > 0 && new_context->listener->client_count > new_context->listener->max_connections){
 			_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE, "Client connection from %s denied: max_connections exceeded.", new_context->address);
-			COMPAT_CLOSE(new_sock);
+			mqtt3_context_cleanup(NULL, new_context, true);
 			return -1;
 		}
+
+#ifdef WITH_TLS
+		/* TLS init */
+		for(i=0; i<db->config->listener_count; i++){
+			for(j=0; j<db->config->listeners[i].sock_count; j++){
+				if(db->config->listeners[i].socks[j] == listensock){
+					if(db->config->listeners[i].ssl_ctx){
+						new_context->ssl = SSL_new(db->config->listeners[i].ssl_ctx);
+						if(!new_context->ssl){
+							mqtt3_context_cleanup(NULL, new_context, true);
+							return -1;
+						}
+						SSL_set_ex_data(new_context->ssl, tls_ex_index_context, new_context);
+						SSL_set_ex_data(new_context->ssl, tls_ex_index_listener, &db->config->listeners[i]);
+						new_context->want_write = true;
+						bio = BIO_new_socket(new_sock, BIO_NOCLOSE);
+						SSL_set_bio(new_context->ssl, bio, bio);
+						rc = SSL_accept(new_context->ssl);
+						if(rc != 1){
+							rc = SSL_get_error(new_context->ssl, rc);
+							if(rc == SSL_ERROR_WANT_READ){
+								/* We always want to read. */
+							}else if(rc == SSL_ERROR_WANT_WRITE){
+								new_context->want_write = true;
+							}else{
+								e = ERR_get_error();
+								while(e){
+									_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE,
+											"Client connection from %s failed: %s.",
+											new_context->address, ERR_error_string(e, ebuf));
+									e = ERR_get_error();
+								}
+								mqtt3_context_cleanup(NULL, new_context, true);
+								return -1;
+							}
+						}
+					}
+				}
+			}
+		}
+#endif
+
 		_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE, "New connection from %s on port %d.", new_context->address, new_context->listener->port);
 		for(i=0; i<db->context_count; i++){
 			if(db->contexts[i] == NULL){
@@ -169,54 +212,11 @@ int mqtt3_socket_accept(struct mosquitto_db *db, int listensock)
 			}else{
 				// Out of memory
 				mqtt3_context_cleanup(NULL, new_context, true);
+				return -1;
 			}
 		}
 		// If we got here then the context's DB index is "i" regardless of how we got here
 		new_context->db_index = i;
-		new_context->listener->client_count++;
-
-#ifdef WITH_TLS
-		/* TLS init */
-		for(i=0; i<db->config->listener_count; i++){
-			for(j=0; j<db->config->listeners[i].sock_count; j++){
-				if(db->config->listeners[i].socks[j] == listensock){
-					if(db->config->listeners[i].ssl_ctx){
-						new_context->ssl = SSL_new(db->config->listeners[i].ssl_ctx);
-						if(!new_context->ssl){
-							COMPAT_CLOSE(new_sock);
-							return -1;
-						}
-						SSL_set_ex_data(new_context->ssl, tls_ex_index_context, new_context);
-						SSL_set_ex_data(new_context->ssl, tls_ex_index_listener, &db->config->listeners[i]);
-						new_context->want_read = true;
-						new_context->want_write = true;
-						bio = BIO_new_socket(new_sock, BIO_NOCLOSE);
-						SSL_set_bio(new_context->ssl, bio, bio);
-						rc = SSL_accept(new_context->ssl);
-						if(rc != 1){
-							rc = SSL_get_error(new_context->ssl, rc);
-							if(rc == SSL_ERROR_WANT_READ){
-								new_context->want_read = true;
-							}else if(rc == SSL_ERROR_WANT_WRITE){
-								new_context->want_write = true;
-							}else{
-								e = ERR_get_error();
-								while(e){
-									_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE,
-											"Client connection from %s failed: %s.",
-											new_context->address, ERR_error_string(e, ebuf));
-									e = ERR_get_error();
-								}
-								COMPAT_CLOSE(new_sock);
-								SSL_free(new_context->ssl);
-								new_context->ssl = NULL;
-							}
-						}
-					}
-				}
-			}
-		}
-#endif
 
 #ifdef WITH_WRAP
 	}

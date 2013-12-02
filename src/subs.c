@@ -162,6 +162,8 @@ static int _sub_topic_tokenise(const char *subtopic, struct _sub_token **topics)
 	assert(subtopic);
 	assert(topics);
 
+	if(strlen(subtopic) == 0) return 1;
+
 	local_subtopic = _mosquitto_strdup(subtopic);
 	if(!local_subtopic) return MOSQ_ERR_NOMEM;
 	real_subtopic = local_subtopic;
@@ -264,7 +266,10 @@ static int _sub_add(struct mosquitto_db *db, struct mosquitto *context, int qos,
 	branch = _mosquitto_calloc(1, sizeof(struct _mosquitto_subhier));
 	if(!branch) return MOSQ_ERR_NOMEM;
 	branch->topic = _mosquitto_strdup(tokens->topic);
-	if(!branch->topic) return MOSQ_ERR_NOMEM;
+	if(!branch->topic){
+		_mosquitto_free(branch);
+		return MOSQ_ERR_NOMEM;
+	}
 	if(!last){
 		subhier->children = branch;
 	}else{
@@ -643,17 +648,14 @@ static int _retain_search(struct mosquitto_db *db, struct _mosquitto_subhier *su
 			}
 		}else if(strcmp(branch->topic, "+") && (!strcmp(branch->topic, tokens->topic) || !strcmp(tokens->topic, "+"))){
 			if(tokens->next){
-				if(_retain_search(db, branch, tokens->next, context, sub, sub_qos, level+1) == -1){
+				if(_retain_search(db, branch, tokens->next, context, sub, sub_qos, level+1) == -1
+						|| (!branch->next && tokens->next && !strcmp(tokens->next->topic, "#") && level>0)){
+
 					if(branch->retained){
 						_retain_process(db, branch->retained, context, sub, sub_qos);
 					}
 				}
 			}else{
-				if(branch->retained){
-					_retain_process(db, branch->retained, context, sub, sub_qos);
-				}
-			}
-			if(!branch->next && tokens->next && !strcmp(tokens->next->topic, "#") && level>0){
 				if(branch->retained){
 					_retain_process(db, branch->retained, context, sub, sub_qos);
 				}

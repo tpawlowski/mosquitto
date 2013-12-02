@@ -47,6 +47,11 @@ import sys
 import threading
 import time
 
+MOSQUITTO_MAJOR=1
+MOSQUITTO_MINOR=2
+MOSQUITTO_REVISION=3
+MOSQUITTO_VERSION_NUMBER=(MOSQUITTO_MAJOR*1000000+MOSQUITTO_MINOR*1000+MOSQUITTO_REVISION)
+
 if platform.system() == 'Windows':
     EAGAIN = errno.WSAEWOULDBLOCK
 else:
@@ -1113,7 +1118,16 @@ class Mosquitto:
             rc = MOSQ_ERR_SUCCESS
             while rc == MOSQ_ERR_SUCCESS:
                 rc = self.loop(timeout, max_packets)
-                if self._thread_terminate:
+                # We don't need to worry about locking here, because we've
+                # either called loop_forever() when in single threaded mode, or
+                # in multi threaded mode when loop_stop() has been called and
+                # so no other threads can access _current_out_packet,
+                # _out_packet or _messages.
+                if (self._thread_terminate
+                        and self._current_out_packet == None
+                        and len(self._out_packet) == 0
+                        and len(self._messages) == 0):
+
                     rc = 1
                     run = False
                 if rc == MOSQ_ERR_SUCCESS:

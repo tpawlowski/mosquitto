@@ -1,3 +1,26 @@
+1.2.3 - 20131202
+================
+
+Broker:
+- Don't always attempt to call read() for SSL clients, irrespective of whether
+  they were ready to read or not. Reduces syscalls significantly.
+- Possible memory leak fixes. 
+- Further fix for bug #1226040: multiple retained messages being delivered for
+  subscriptions ending in #.
+- Fix bridge reconnections when using multiple bridge addresses.
+
+Client library:
+- Fix possible memory leak in C/C++ library when communicating with
+  a broker that doesn't follow the spec.
+- Block in Python loop_stop() until all messages are sent, as the
+  documentation states should happen.
+- Fix for asynchronous connections on Windows. Closes bug #1249202.
+- Module version is now available in mosquitto.py.
+
+Clients:
+- mosquitto_sub now uses fwrite() instead of printf() to output messages, so
+  messages with NULL characters aren't truncated.
+
 1.2.2 - 20131021
 ================
 

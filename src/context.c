@@ -70,13 +70,15 @@ struct mosquitto *mqtt3_context_init(int sock)
 	context->current_out_packet = NULL;
 
 	context->address = NULL;
-	if(!_mosquitto_socket_get_address(sock, address, 1024)){
-		context->address = _mosquitto_strdup(address);
-	}
-	if(!context->address && sock != -1){
-		/* getpeername and inet_ntop failed and not a bridge */
-		_mosquitto_free(context);
-		return NULL;
+	if(sock != -1){
+		if(!_mosquitto_socket_get_address(sock, address, 1024)){
+			context->address = _mosquitto_strdup(address);
+		}
+		if(!context->address){
+			/* getpeername and inet_ntop failed and not a bridge */
+			_mosquitto_free(context);
+			return NULL;
+		}
 	}
 	context->bridge = NULL;
 	context->msgs = NULL;
@@ -117,6 +119,12 @@ void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, b
 		}
 	}
 #endif
+#ifdef WITH_TLS
+	if(context->ssl){
+		SSL_free(context->ssl);
+		context->ssl = NULL;
+	}
+#endif
 	if(context->sock != -1){
 		if(context->listener){
 			context->listener->client_count--;
@@ -134,6 +142,9 @@ void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, b
 		context->address = NULL;
 	}
 	if(context->id){
+		assert(db); /* db can only be NULL here if the client hasn't sent a
+					   CONNECT and hence wouldn't have an id. */
+
 		// Remove the context's ID from the DB hash
 		struct _clientid_index_hash *find_cih;
 		HASH_FIND_STR(db->clientid_index_hash, context->id, find_cih);

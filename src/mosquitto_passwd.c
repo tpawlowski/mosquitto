@@ -121,6 +121,7 @@ int output_new_password(FILE *fptr, const char *username, const char *password)
 
 	digest = EVP_get_digestbyname("sha512");
 	if(!digest){
+		if(salt64) free(salt64);
 		fprintf(stderr, "Error: Unable to create openssl digest.\n");
 		return 1;
 	}
@@ -129,7 +130,6 @@ int output_new_password(FILE *fptr, const char *username, const char *password)
 	pass_salt = malloc(pass_salt_len);
 	if(!pass_salt){
 		if(salt64) free(salt64);
-		if(hash64) free(hash64);
 		fprintf(stderr, "Error: Out of memory.\n");
 		return 1;
 	}
