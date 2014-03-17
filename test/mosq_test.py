@@ -1,3 +1,4 @@
+import socket
 import struct
 
 def expect_packet(sock, name, expected):
@@ -24,6 +25,18 @@ def packet_matches(name, recvd, expected):
         return 0
     else:
         return 1
+
+def do_client_connect(connect_packet, connack_packet, hostname="localhost", port=1888, timeout=60, connack_error="connack"):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    sock.connect((hostname, port))
+    sock.send(connect_packet)
+
+    if expect_packet(sock, connack_error, connack_packet):
+        return sock
+    else:
+        sock.close()
+        raise ValueError
 
 def remaining_length(packet):
     l = min(5, len(packet))
@@ -202,10 +215,16 @@ def to_string(packet):
         return "0xF0"
 
 def gen_connect(client_id, clean_session=True, keepalive=60, username=None, password=None, will_topic=None, will_qos=0, will_retain=False, will_payload="", proto_ver=3):
-    if client_id == None:
+    if (proto_ver&0x7F) == 3 or proto_ver == 0:
         remaining_length = 12
+    elif (proto_ver&0x7F) == 4:
+        remaining_length = 10
     else:
-        remaining_length = 12 + 2+len(client_id)
+        raise ValueError
+
+    if client_id != None:
+        remaining_length = remaining_length + 2+len(client_id)
+
     connect_flags = 0
     if clean_session:
         connect_flags = connect_flags | 0x02
@@ -225,7 +244,11 @@ def gen_connect(client_id, clean_session=True, keepalive=60, username=None, pass
 
     rl = pack_remaining_length(remaining_length)
     packet = struct.pack("!B"+str(len(rl))+"s", 0x10, rl)
-    packet = packet + struct.pack("!H6sBBH", len("MQIsdp"), "MQIsdp", proto_ver, connect_flags, keepalive)
+    if (proto_ver&0x7F) == 3 or proto_ver == 0:
+        packet = packet + struct.pack("!H6sBBH", len("MQIsdp"), "MQIsdp", proto_ver, connect_flags, keepalive)
+    elif (proto_ver&0x7F) == 4:
+        packet = packet + struct.pack("!H4sBBH", len("MQTT"), "MQTT", proto_ver, connect_flags, keepalive)
+
     if client_id != None:
         packet = packet + struct.pack("!H"+str(len(client_id))+"s", len(client_id), client_id)
 

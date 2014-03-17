@@ -95,7 +95,7 @@ int drop_privileges(struct mqtt3_config *config)
 	char err[256];
 
 	if(geteuid() == 0){
-		if(config->user){
+		if(config->user && strcmp(config->user, "root")){
 			pwd = getpwnam(config->user);
 			if(!pwd){
 				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Invalid user '%s'.", config->user);
@@ -165,6 +165,11 @@ int main(int argc, char *argv[])
 	int listener_max;
 	int rc;
 	char err[256];
+#ifdef WIN32
+	SYSTEMTIME st;
+#else
+	struct timeval tv;
+#endif
 
 #if defined(WIN32) || defined(__CYGWIN__)
 	if(argc == 2){
@@ -179,6 +184,15 @@ int main(int argc, char *argv[])
 			return 0;
 		}
 	}
+#endif
+
+
+#ifdef WIN32
+	GetSystemTime(&st);
+	srand(st.wSecond + st.wMilliseconds);
+#else
+	gettimeofday(&tv, NULL);
+	srand(tv.tv_sec + tv.tv_usec);
 #endif
 
 	memset(&int_db, 0, sizeof(struct mosquitto_db));
@@ -241,14 +255,18 @@ int main(int argc, char *argv[])
 	rc = mosquitto_security_init(&int_db, false);
 	if(rc) return rc;
 
-	/* Set static $SYS messages */
-	snprintf(buf, 1024, "mosquitto version %s", VERSION);
-	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/version", 2, strlen(buf), buf, 1);
-	snprintf(buf, 1024, "%s", TIMESTAMP);
-	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/timestamp", 2, strlen(buf), buf, 1);
+#ifdef WITH_SYS_TREE
+	if(config.sys_interval > 0){
+		/* Set static $SYS messages */
+		snprintf(buf, 1024, "mosquitto version %s", VERSION);
+		mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/version", 2, strlen(buf), buf, 1);
+		snprintf(buf, 1024, "%s", TIMESTAMP);
+		mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/timestamp", 2, strlen(buf), buf, 1);
 #ifdef CHANGESET
-	snprintf(buf, 1024, "%s", CHANGESET);
-	mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/changeset", 2, strlen(buf), buf, 1);
+		snprintf(buf, 1024, "%s", CHANGESET);
+		mqtt3_db_messages_easy_queue(&int_db, NULL, "$SYS/broker/changeset", 2, strlen(buf), buf, 1);
+#endif
+	}
 #endif
 
 	listener_max = -1;

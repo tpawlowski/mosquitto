@@ -27,6 +27,8 @@
 			<arg><option>-p</option> <replaceable>port number</replaceable></arg>
 			<arg><option>-q</option> <replaceable>message QoS</replaceable></arg>
 			<arg><option>-R</option></arg>
+			<arg><option>-S</option></arg>
+			<arg><option>-N</option></arg>
 			<arg><option>--quiet</option></arg>
 			<arg><option>-v</option></arg>
 			<arg>
@@ -56,6 +58,7 @@
 					<arg><option>--tls-version</option> <replaceable>version</replaceable></arg>
 				</arg>
 			</group>
+			<arg choice='opt' rep='repeat'><option>-T</option> <replaceable>filter-out</replaceable></arg>
 			<arg choice='plain' rep='repeat'><option>-t</option> <replaceable>message-topic</replaceable></arg>
 		</cmdsynopsis>
 		<cmdsynopsis>
@@ -127,6 +130,15 @@
 						certificate for this client, if required by the
 						server.</para>
 					<para>See also <option>--key</option>.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>--ciphers</option></term>
+				<listitem>
+					<para>An openssl compatible list of TLS ciphers to support
+						in the client. See
+						<citerefentry><refentrytitle>ciphers</refentrytitle><manvolnum>1</manvolnum></citerefentry>
+						for more information.</para>
 				</listitem>
 			</varlistentry>
 			<varlistentry>
@@ -204,6 +216,16 @@
 				</listitem>
 			</varlistentry>
 			<varlistentry>
+				<term><option>-N</option></term>
+				<listitem>
+					<para>Do not append an end of line character to the payload
+						when printing. This allows streaming of payload data
+						from multiple messages directly to another application
+						unmodified. Only really makes sense when not using
+						<option>-v</option>.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
 				<term><option>-p</option></term>
 				<term><option>--port</option></term>
 				<listitem>
@@ -272,6 +294,17 @@
 				</listitem>
 			</varlistentry>
 			<varlistentry>
+				<term><option>-S</option></term>
+				<listitem>
+					<para>Use SRV lookups to determine which host to connect
+						to. Performs lookups to
+						<option>_mqtt._tcp.&lt;host&gt;</option> when used in
+						conjunction with <option>-h</option>, otherwise uses
+						<option>_mqtt._tcp.&lt;local dns
+							domain&gt;</option>.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
 				<term><option>-t</option></term>
 				<term><option>--topic</option></term>
 				<listitem>
@@ -279,6 +312,24 @@
 					<citerefentry><refentrytitle>mqtt</refentrytitle><manvolnum>7</manvolnum></citerefentry>
 					for more information on MQTT topics.</para>
 					<para>This option may be repeated to subscribe to multiple topics.</para>
+				</listitem>
+			</varlistentry>
+			<varlistentry>
+				<term><option>-T</option></term>
+				<term><option>--filter-out</option></term>
+				<listitem>
+					<para>Suppress printing of topics that match the filter.
+						This allows subscribing to a wildcard topic and only
+						printing a partial set of the wildcard
+						hierarchy.</para>
+					<para>For example, subscribe to the BBC tree, but suppress output from Radio 3:</para>
+					<itemizedlist mark="circle">
+						<listitem><para>mosquitto_sub <literal>-t</literal>
+								bbc/# <literal>-T</literal>
+								bbc/radio3</para></listitem>
+					</itemizedlist>
+					<para>This option may be repeated to filter out multiple
+						topics or topic trees.</para>
 				</listitem>
 			</varlistentry>
 			<varlistentry>
@@ -389,28 +440,38 @@
 
 	<refsect1>
 		<title>See Also</title>
-		<para>
-			<citerefentry>
-				<refentrytitle><link xlink:href="mqtt-7.html">mqtt</link></refentrytitle>
-				<manvolnum>7</manvolnum>
-			</citerefentry>
-			<citerefentry>
-				<refentrytitle><link xlink:href="mosquitto_pub-1.html">mosquitto_pub</link></refentrytitle>
-				<manvolnum>1</manvolnum>
-			</citerefentry>
-			<citerefentry>
-				<refentrytitle><link xlink:href="mosquitto-8.html">mosquitto</link></refentrytitle>
-				<manvolnum>8</manvolnum>
-			</citerefentry>
-			<citerefentry>
-				<refentrytitle><link xlink:href="libmosquitto-3.html">libmosquitto</link></refentrytitle>
-				<manvolnum>3</manvolnum>
-			</citerefentry>
-			<citerefentry>
-				<refentrytitle><link xlink:href="mosquitto-tls-7.html">mosquitto-tls</link></refentrytitle>
-				<manvolnum>7</manvolnum>
-			</citerefentry>
-		</para>
+		<simplelist type="inline">
+			<member>
+				<citerefentry>
+					<refentrytitle><link xlink:href="mqtt-7.html">mqtt</link></refentrytitle>
+					<manvolnum>7</manvolnum>
+				</citerefentry>
+			</member>
+			<member>
+				<citerefentry>
+					<refentrytitle><link xlink:href="mosquitto_pub-1.html">mosquitto_pub</link></refentrytitle>
+					<manvolnum>1</manvolnum>
+				</citerefentry>
+			</member>
+			<member>
+				<citerefentry>
+					<refentrytitle><link xlink:href="mosquitto-8.html">mosquitto</link></refentrytitle>
+					<manvolnum>8</manvolnum>
+				</citerefentry>
+			</member>
+			<member>
+				<citerefentry>
+					<refentrytitle><link xlink:href="libmosquitto-3.html">libmosquitto</link></refentrytitle>
+					<manvolnum>3</manvolnum>
+				</citerefentry>
+			</member>
+			<member>
+				<citerefentry>
+					<refentrytitle><link xlink:href="mosquitto-tls-7.html">mosquitto-tls</link></refentrytitle>
+					<manvolnum>7</manvolnum>
+				</citerefentry>
+			</member>
+		</simplelist>
 	</refsect1>
 
 	<refsect1>

@@ -34,27 +34,22 @@ def pattern_test(sub_topic, pub_topic):
     try:
         time.sleep(0.5)
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect(("localhost", 1888))
-        sock.settimeout(20)
-        sock.send(connect_packet)
+        sock = mosq_test.do_client_connect(connect_packet, connack_packet, timeout=20)
+        sock.send(subscribe_packet)
 
-        if mosq_test.expect_packet(sock, "connack", connack_packet):
-            sock.send(subscribe_packet)
+        if mosq_test.expect_packet(sock, "suback", suback_packet):
+            pub = subprocess.Popen(['./03-pattern-matching-helper.py', pub_topic])
+            pub.wait()
 
-            if mosq_test.expect_packet(sock, "suback", suback_packet):
-                pub = subprocess.Popen(['./03-pattern-matching-helper.py', pub_topic])
-                pub.wait()
+            if mosq_test.expect_packet(sock, "publish", publish_packet):
+                sock.send(unsubscribe_packet)
 
-                if mosq_test.expect_packet(sock, "publish", publish_packet):
-                    sock.send(unsubscribe_packet)
+                if mosq_test.expect_packet(sock, "unsuback", unsuback_packet):
+                    sock.send(subscribe_packet)
 
-                    if mosq_test.expect_packet(sock, "unsuback", unsuback_packet):
-                        sock.send(subscribe_packet)
-
-                        if mosq_test.expect_packet(sock, "suback", suback_packet):
-                            if mosq_test.expect_packet(sock, "publish retained", publish_retained_packet):
-                                rc = 0
+                    if mosq_test.expect_packet(sock, "suback", suback_packet):
+                        if mosq_test.expect_packet(sock, "publish retained", publish_retained_packet):
+                            rc = 0
 
         sock.close()
     finally:
@@ -63,6 +58,7 @@ def pattern_test(sub_topic, pub_topic):
         if rc:
             (stdo, stde) = broker.communicate()
             print(stde)
+            raise
 
     return rc
 
@@ -75,8 +71,20 @@ pattern_test("foo/+/baz/#", "foo/bar/baz/bar")
 pattern_test("foo/foo/baz/#", "foo/foo/baz/bar")
 pattern_test("foo/#", "foo")
 pattern_test("/#", "/foo")
-pattern_test("test/topic/", "test/topic")
+pattern_test("test/topic/", "test/topic/")
+pattern_test("test/topic/+", "test/topic/")
 pattern_test("+/+/+/+/+/+/+/+/+/+/test", "one/two/three/four/five/six/seven/eight/nine/ten/test")
+
+pattern_test("#", "test////a//topic")
+pattern_test("#", "/test////a//topic")
+pattern_test("foo/#", "foo//bar///baz")
+pattern_test("foo/+/baz", "foo//baz")
+pattern_test("foo/+/baz//", "foo//baz//")
+pattern_test("foo/+/baz/#", "foo//baz")
+pattern_test("foo/+/baz/#", "foo//baz/bar")
+pattern_test("foo//baz/#", "foo//baz/bar")
+pattern_test("foo/foo/baz/#", "foo/foo/baz/bar")
+pattern_test("/#", "////foo///bar")
 
 exit(0)
 

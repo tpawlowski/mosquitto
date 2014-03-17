@@ -93,6 +93,14 @@
 			<listitem><para>a/b/c/#</para></listitem>
 			<listitem><para>+/b/c/#</para></listitem>
 		</itemizedlist>
+		<para>Zero length topic levels are valid, which can lead to some
+			slightly non-obvious behaviour. For example, a topic of "a//topic"
+			would correctly match against a subscription of "a/+/topic".
+			Likewise, zero length topic levels can exist at both the beginning
+			and the end of a topic string, so "/a/topic" would match against a
+			subscription of "+/a/topic", "#" or "/#", and a topic "a/topic/"
+			would match against a subscription of "a/topic/+" or
+			"a/topic/#".</para>
 	</refsect1>
 
 	<refsect1>
@@ -150,20 +158,26 @@
 
 	<refsect1>
 		<title>See Also</title>
-		<para>
-			<citerefentry>
-				<refentrytitle><link xlink:href="mosquitto-8.html">mosquitto</link></refentrytitle>
-				<manvolnum>8</manvolnum>
-			</citerefentry>
-			<citerefentry>
-				<refentrytitle><link xlink:href="mosquitto_pub-1.html">mosquitto_pub</link></refentrytitle>
-				<manvolnum>1</manvolnum>
-			</citerefentry>
-			<citerefentry>
-				<refentrytitle><link xlink:href="mosquitto_sub-1.html">mosquitto_sub</link></refentrytitle>
-				<manvolnum>1</manvolnum>
-			</citerefentry>
-		</para>
+		<simplelist type="inline">
+			<member>
+				<citerefentry>
+					<refentrytitle><link xlink:href="mosquitto-8.html">mosquitto</link></refentrytitle>
+					<manvolnum>8</manvolnum>
+				</citerefentry>
+			</member>
+			<member>
+				<citerefentry>
+					<refentrytitle><link xlink:href="mosquitto_pub-1.html">mosquitto_pub</link></refentrytitle>
+					<manvolnum>1</manvolnum>
+				</citerefentry>
+			</member>
+			<member>
+				<citerefentry>
+					<refentrytitle><link xlink:href="mosquitto_sub-1.html">mosquitto_sub</link></refentrytitle>
+					<manvolnum>1</manvolnum>
+				</citerefentry>
+			</member>
+		</simplelist>
 	</refsect1>
 
 	<refsect1>

@@ -115,10 +115,6 @@ int mqtt3_handle_publish(struct mosquitto_db *db, struct mosquitto *context)
 		_mosquitto_free(topic);
 		return 1;
 	}
-	if(_mosquitto_fix_sub_topic(&topic)){
-		_mosquitto_free(topic);
-		return 1;
-	}
 	if(!strlen(topic)){
 		_mosquitto_free(topic);
 		return 1;
@@ -127,7 +123,9 @@ int mqtt3_handle_publish(struct mosquitto_db *db, struct mosquitto *context)
 	if(context->bridge && context->bridge->topics && context->bridge->topic_remapping){
 		for(i=0; i<context->bridge->topic_count; i++){
 			cur_topic = &context->bridge->topics[i];
-			if(cur_topic->remote_prefix || cur_topic->local_prefix){
+			if((cur_topic->direction == bd_both || cur_topic->direction == bd_in) 
+					&& (cur_topic->remote_prefix || cur_topic->local_prefix)){
+
 				/* Topic mapping required on this topic if the message matches */
 
 				rc = mosquitto_topic_matches_sub(cur_topic->remote_topic, topic, &match);

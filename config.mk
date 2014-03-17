@@ -67,6 +67,9 @@ WITH_SYS_TREE:=yes
 # Python modules are not available.
 WITH_PYTHON:=yes
 
+# Build with SRV lookup support.
+WITH_SRV:=yes
+
 # =============================================================================
 # End of user configuration
 # =============================================================================
@@ -74,7 +77,7 @@ WITH_PYTHON:=yes
 
 # Also bump lib/mosquitto.h, lib/python/setup.py, CMakeLists.txt,
 # installer/mosquitto.nsi, installer/mosquitto-cygwin.nsi
-VERSION=1.2.3
+VERSION=1.3
 TIMESTAMP:=$(shell date "+%F %T%z")
 
 # Client library SO version. Bump if incompatible API/ABI changes are made.
@@ -196,6 +199,11 @@ endif
 
 ifeq ($(WITH_SYS_TREE),yes)
 	BROKER_CFLAGS:=$(BROKER_CFLAGS) -DWITH_SYS_TREE
+endif
+
+ifeq ($(WITH_SRV),yes)
+	LIB_CFLAGS:=$(LIB_CFLAGS) -DWITH_SRV
+	LIB_LIBS:=$(LIB_LIBS) -lcares
 endif
 
 ifeq ($(UNAME),SunOS)

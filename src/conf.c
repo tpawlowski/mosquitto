@@ -117,6 +117,9 @@ static void _config_init_reload(struct mqtt3_config *config)
 	config->acl_file = NULL;
 	config->allow_anonymous = true;
 	config->allow_duplicate_messages = false;
+	config->allow_zero_length_clientid = true;
+	config->auto_id_prefix = NULL;
+	config->auto_id_prefix_len = 0;
 	config->autosave_interval = 1800;
 	config->autosave_on_changes = false;
 	if(config->clientid_prefixes) _mosquitto_free(config->clientid_prefixes);
@@ -220,6 +223,7 @@ void mqtt3_config_cleanup(struct mqtt3_config *config)
 #endif
 
 	if(config->acl_file) _mosquitto_free(config->acl_file);
+	if(config->auto_id_prefix) _mosquitto_free(config->auto_id_prefix);
 	if(config->clientid_prefixes) _mosquitto_free(config->clientid_prefixes);
 	if(config->config_file) _mosquitto_free(config->config_file);
 	if(config->password_file) _mosquitto_free(config->password_file);
@@ -235,10 +239,13 @@ void mqtt3_config_cleanup(struct mqtt3_config *config)
 #ifdef WITH_TLS
 			if(config->listeners[i].cafile) _mosquitto_free(config->listeners[i].cafile);
 			if(config->listeners[i].capath) _mosquitto_free(config->listeners[i].capath);
+			if(config->listeners[i].certfile) _mosquitto_free(config->listeners[i].certfile);
 			if(config->listeners[i].keyfile) _mosquitto_free(config->listeners[i].keyfile);
 			if(config->listeners[i].ciphers) _mosquitto_free(config->listeners[i].ciphers);
 			if(config->listeners[i].psk_hint) _mosquitto_free(config->listeners[i].psk_hint);
 			if(config->listeners[i].crlfile) _mosquitto_free(config->listeners[i].crlfile);
+			if(config->listeners[i].tls_version) _mosquitto_free(config->listeners[i].tls_version);
+			if(config->listeners[i].ssl_ctx) SSL_CTX_free(config->listeners[i].ssl_ctx);
 #endif
 		}
 		_mosquitto_free(config->listeners);
@@ -618,6 +625,8 @@ int _config_read_file(struct mqtt3_config *config, bool reload, const char *file
 					if(_conf_parse_bool(&token, "allow_anonymous", &config->allow_anonymous, saveptr)) return MOSQ_ERR_INVAL;
 				}else if(!strcmp(token, "allow_duplicate_messages")){
 					if(_conf_parse_bool(&token, "allow_duplicate_messages", &config->allow_duplicate_messages, saveptr)) return MOSQ_ERR_INVAL;
+				}else if(!strcmp(token, "allow_zero_length_clientid")){
+					if(_conf_parse_bool(&token, "allow_zero_length_clientid", &config->allow_zero_length_clientid, saveptr)) return MOSQ_ERR_INVAL;
 				}else if(!strncmp(token, "auth_opt_", 9)){
 					if(strlen(token) < 12){
 						/* auth_opt_ == 9, + one digit key == 10, + one space == 11, + one value == 12 */
@@ -653,6 +662,13 @@ int _config_read_file(struct mqtt3_config *config, bool reload, const char *file
 				}else if(!strcmp(token, "auth_plugin")){
 					if(reload) continue; // Auth plugin not currently valid for reloading.
 					if(_conf_parse_string(&token, "auth_plugin", &config->auth_plugin, saveptr)) return MOSQ_ERR_INVAL;
+				}else if(!strcmp(token, "auto_id_prefix")){
+					if(_conf_parse_string(&token, "auto_id_prefix", &config->auto_id_prefix, saveptr)) return MOSQ_ERR_INVAL;
+					if(config->auto_id_prefix){
+						config->auto_id_prefix_len = strlen(config->auto_id_prefix);
+					}else{
+						config->auto_id_prefix_len = 0;
+					}
 				}else if(!strcmp(token, "autosave_interval")){
 					if(_conf_parse_int(&token, "autosave_interval", &config->autosave_interval, saveptr)) return MOSQ_ERR_INVAL;
 					if(config->autosave_interval < 0) config->autosave_interval = 0;
@@ -1262,6 +1278,12 @@ int _config_read_file(struct mqtt3_config *config, bool reload, const char *file
 						return MOSQ_ERR_INVAL;
 					}
 					if(_conf_parse_string(&token, "mount_point", &cur_listener->mount_point, saveptr)) return MOSQ_ERR_INVAL;
+					if(_mosquitto_topic_wildcard_len_check(cur_listener->mount_point) != MOSQ_ERR_SUCCESS){
+						_mosquitto_log_printf(NULL, MOSQ_LOG_ERR,
+								"Error: Invalid mount_point '%s'. Does it contain a wildcard character?",
+								cur_listener->mount_point);
+						return MOSQ_ERR_INVAL;
+					}
 				}else if(!strcmp(token, "notifications")){
 #ifdef WITH_BRIDGE
 					if(reload) continue; // FIXME
@@ -1281,10 +1303,6 @@ int _config_read_file(struct mqtt3_config *config, bool reload, const char *file
 						return MOSQ_ERR_INVAL;
 					}
 					if(_conf_parse_string(&token, "notification_topic", &cur_bridge->notification_topic, saveptr)) return MOSQ_ERR_INVAL;
-					if(_mosquitto_fix_sub_topic(&cur_bridge->notification_topic)){
-						_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory");
-						return MOSQ_ERR_NOMEM;
-					}
 #else
 					_mosquitto_log_printf(NULL, MOSQ_LOG_WARNING, "Warning: Bridge support not available.");
 #endif
@@ -1467,7 +1485,7 @@ int _config_read_file(struct mqtt3_config *config, bool reload, const char *file
 					}
 				}else if(!strcmp(token, "sys_interval")){
 					if(_conf_parse_int(&token, "sys_interval", &config->sys_interval, saveptr)) return MOSQ_ERR_INVAL;
-					if(config->sys_interval < 1 || config->sys_interval > 65535){
+					if(config->sys_interval < 0 || config->sys_interval > 65535){
 						_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Invalid sys_interval value (%d).", config->sys_interval);
 						return MOSQ_ERR_INVAL;
 					}
@@ -1515,10 +1533,6 @@ int _config_read_file(struct mqtt3_config *config, bool reload, const char *file
 						}else{
 							cur_topic->topic = _mosquitto_strdup(token);
 							if(!cur_topic->topic){
-								_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory");
-								return MOSQ_ERR_NOMEM;
-							}
-							if(_mosquitto_fix_sub_topic(&cur_topic->topic)){
 								_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory");
 								return MOSQ_ERR_NOMEM;
 							}
@@ -1616,12 +1630,6 @@ int _config_read_file(struct mqtt3_config *config, bool reload, const char *file
 							return MOSQ_ERR_NOMEM;
 						}
 					}
-					if(cur_topic->local_topic){
-						if(_mosquitto_fix_sub_topic(&cur_topic->local_topic)){
-							_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory");
-							return MOSQ_ERR_NOMEM;
-						}
-					}
 
 					if(cur_topic->remote_prefix){
 						if(cur_topic->topic){
@@ -1642,12 +1650,6 @@ int _config_read_file(struct mqtt3_config *config, bool reload, const char *file
 					}else{
 						cur_topic->remote_topic = _mosquitto_strdup(cur_topic->topic);
 						if(!cur_topic->remote_topic){
-							_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory");
-							return MOSQ_ERR_NOMEM;
-						}
-					}
-					if(cur_topic->remote_topic){
-						if(_mosquitto_fix_sub_topic(&cur_topic->remote_topic)){
 							_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Out of memory");
 							return MOSQ_ERR_NOMEM;
 						}

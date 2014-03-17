@@ -82,6 +82,9 @@ struct mosquitto *mqtt3_context_init(int sock)
 	}
 	context->bridge = NULL;
 	context->msgs = NULL;
+	context->last_msg = NULL;
+	context->msg_count = 0;
+	context->msg_count12 = 0;
 #ifdef WITH_TLS
 	context->ssl = NULL;
 #endif
@@ -99,6 +102,8 @@ void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, b
 {
 	struct _mosquitto_packet *packet;
 	struct mosquitto_client_msg *msg, *next;
+	struct _clientid_index_hash *find_cih;
+
 	if(!context) return;
 
 	if(context->username){
@@ -146,7 +151,6 @@ void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, b
 					   CONNECT and hence wouldn't have an id. */
 
 		// Remove the context's ID from the DB hash
-		struct _clientid_index_hash *find_cih;
 		HASH_FIND_STR(db->clientid_index_hash, context->id, find_cih);
 		if(find_cih){
 			// FIXME - internal level debug? _mosquitto_log_printf(NULL, MOSQ_LOG_INFO, "Found id for client \"%s\", their index was %d.", context->id, find_cih->db_context_index);
@@ -181,6 +185,7 @@ void mqtt3_context_cleanup(struct mosquitto_db *db, struct mosquitto *context, b
 			msg = next;
 		}
 		context->msgs = NULL;
+		context->last_msg = NULL;
 	}
 	if(do_free){
 		_mosquitto_free(context);
@@ -192,6 +197,12 @@ void mqtt3_context_disconnect(struct mosquitto_db *db, struct mosquitto *ctxt)
 	if(ctxt->state != mosq_cs_disconnecting && ctxt->will){
 		/* Unexpected disconnect, queue the client will. */
 		mqtt3_db_messages_easy_queue(db, ctxt, ctxt->will->topic, ctxt->will->qos, ctxt->will->payloadlen, ctxt->will->payload, ctxt->will->retain);
+	}
+	if(ctxt->will){
+		if(ctxt->will->topic) _mosquitto_free(ctxt->will->topic);
+		if(ctxt->will->payload) _mosquitto_free(ctxt->will->payload);
+		_mosquitto_free(ctxt->will);
+		ctxt->will = NULL;
 	}
 	if(ctxt->listener){
 		ctxt->listener->client_count--;

@@ -83,7 +83,6 @@ int mqtt3_socket_accept(struct mosquitto_db *db, int listensock)
 	int new_sock = -1;
 	struct mosquitto **tmp_contexts = NULL;
 	struct mosquitto *new_context;
-	int opt = 1;
 #ifdef WITH_TLS
 	BIO *bio;
 	int rc;
@@ -102,20 +101,9 @@ int mqtt3_socket_accept(struct mosquitto_db *db, int listensock)
 	g_socket_connections++;
 #endif
 
-#ifndef WIN32
-	/* Set non-blocking */
-	opt = fcntl(new_sock, F_GETFL, 0);
-	if(opt == -1 || fcntl(new_sock, F_SETFL, opt | O_NONBLOCK) == -1){
-		/* If either fcntl fails, don't want to allow this client to connect. */
-		close(new_sock);
-		return -1;
-	}
-#else
-	if(ioctlsocket(new_sock, FIONBIO, &opt)){
-		closesocket(new_sock);
+	if(_mosquitto_socket_nonblock(new_sock)){
 		return INVALID_SOCKET;
 	}
-#endif
 
 #ifdef WITH_WRAP
 	/* Use tcpd / libwrap to determine whether a connection is allowed. */
@@ -285,7 +273,6 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 	struct addrinfo hints;
 	struct addrinfo *ainfo, *rp;
 	char service[10];
-	int opt = 1;
 #ifndef WIN32
 	int ss_opt = 1;
 #else
@@ -295,8 +282,9 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 	int rc;
 	X509_STORE *store;
 	X509_LOOKUP *lookup;
+	int ssl_options = 0;
 #endif
-	char err[256];
+	char buf[256];
 
 	if(!listener) return MOSQ_ERR_INVAL;
 
@@ -322,8 +310,8 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 
 		sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
 		if(sock == -1){
-			strerror_r(errno, err, 256);
-			_mosquitto_log_printf(NULL, MOSQ_LOG_WARNING, "Warning: %s", err);
+			strerror_r(errno, buf, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_WARNING, "Warning: %s", buf);
 			continue;
 		}
 		listener->sock_count++;
@@ -341,32 +329,20 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 		ss_opt = 1;
 		setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, &ss_opt, sizeof(ss_opt));
 
-
-#ifndef WIN32
-		/* Set non-blocking */
-		opt = fcntl(sock, F_GETFL, 0);
-		if(opt == -1 || fcntl(sock, F_SETFL, opt | O_NONBLOCK) == -1){
-			/* If either fcntl fails, don't want to allow this client to connect. */
-			COMPAT_CLOSE(sock);
+		if(_mosquitto_socket_nonblock(sock)){
 			return 1;
 		}
-#else
-		if(ioctlsocket(sock, FIONBIO, &opt)){
-			COMPAT_CLOSE(sock);
-			return 1;
-		}
-#endif
 
 		if(bind(sock, rp->ai_addr, rp->ai_addrlen) == -1){
-			strerror_r(errno, err, 256);
-			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s", err);
+			strerror_r(errno, buf, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s", buf);
 			COMPAT_CLOSE(sock);
 			return 1;
 		}
 
 		if(listen(sock, 100) == -1){
-			strerror_r(errno, err, 256);
-			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s", err);
+			strerror_r(errno, buf, 256);
+			_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: %s", buf);
 			COMPAT_CLOSE(sock);
 			return 1;
 		}
@@ -385,26 +361,45 @@ int mqtt3_socket_listen(struct _mqtt3_listener *listener)
 			}else if(!strcmp(listener->tls_version, "tlsv1.1")){
 				listener->ssl_ctx = SSL_CTX_new(TLSv1_1_server_method());
 			}else if(!strcmp(listener->tls_version, "tlsv1")){
-				listener->ssl_ctx = SSL_CTX_new(TLSv1_server_method());
+				listener->ssl_ctx = SSL_CTX_new(SSLv23_server_method());
 			}
 #else
-			listener->ssl_ctx = SSL_CTX_new(TLSv1_server_method());
+			listener->ssl_ctx = SSL_CTX_new(SSLv23_server_method());
 #endif
 			if(!listener->ssl_ctx){
 				_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to create TLS context.");
 				COMPAT_CLOSE(sock);
 				return 1;
 			}
-#if OPENSSL_VERSION_NUMBER >= 0x10000000
+
+			/* Don't accept SSLv2 or SSLv3 */
+			ssl_options = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3;
+#ifdef SSL_OP_NO_COMPRESSION
 			/* Disable compression */
-			SSL_CTX_set_options(listener->ssl_ctx, SSL_OP_NO_COMPRESSION);
+			ssl_options |= SSL_OP_NO_COMPRESSION;
 #endif
+#ifdef SSL_OP_CIPHER_SERVER_PREFERENCE
+			/* Server chooses cipher */
+			ssl_options |= SSL_OP_CIPHER_SERVER_PREFERENCE;
+#endif
+			SSL_CTX_set_options(listener->ssl_ctx, ssl_options);
+
 #ifdef SSL_MODE_RELEASE_BUFFERS
 			/* Use even less memory per SSL connection. */
 			SSL_CTX_set_mode(listener->ssl_ctx, SSL_MODE_RELEASE_BUFFERS);
 #endif
+			snprintf(buf, 256, "mosquitto-%d", listener->port);
+			SSL_CTX_set_session_id_context(listener->ssl_ctx, (unsigned char *)buf, strlen(buf));
+
 			if(listener->ciphers){
 				rc = SSL_CTX_set_cipher_list(listener->ssl_ctx, listener->ciphers);
+				if(rc == 0){
+					_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to set TLS ciphers. Check cipher list \"%s\".", listener->ciphers);
+					COMPAT_CLOSE(sock);
+					return 1;
+				}
+			}else{
+				rc = SSL_CTX_set_cipher_list(listener->ssl_ctx, "DEFAULT:!aNULL:!eNULL:!LOW:!EXPORT:!SSLv2:@STRENGTH");
 				if(rc == 0){
 					_mosquitto_log_printf(NULL, MOSQ_LOG_ERR, "Error: Unable to set TLS ciphers. Check cipher list \"%s\".", listener->ciphers);
 					COMPAT_CLOSE(sock);

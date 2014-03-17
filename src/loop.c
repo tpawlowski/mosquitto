@@ -95,7 +95,9 @@ int mosquitto_main_loop(struct mosquitto_db *db, int *listensock, int listensock
 
 	while(run){
 #ifdef WITH_SYS_TREE
-		mqtt3_db_sys_update(db, db->config->sys_interval, start_time);
+		if(db->config->sys_interval > 0){
+			mqtt3_db_sys_update(db, db->config->sys_interval, start_time);
+		}
 #endif
 
 		if(listensock_count + db->context_count > pollfd_count || !pollfds){
@@ -352,15 +354,7 @@ static void loop_handle_reads_writes(struct mosquitto_db *db, struct pollfd *pol
 			if(pollfds[db->contexts[i]->pollfd_index].revents & POLLOUT){
 #endif
 				if(_mosquitto_packet_write(db->contexts[i])){
-					if(db->config->connection_messages == true){
-						if(db->contexts[i]->state != mosq_cs_disconnecting){
-							_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE, "Socket write error on client %s, disconnecting.", db->contexts[i]->id);
-						}else{
-							_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE, "Client %s disconnected.", db->contexts[i]->id);
-						}
-					}
-					/* Write error or other that means we should disconnect */
-					mqtt3_context_disconnect(db, db->contexts[i]);
+					do_disconnect(db, i);
 				}
 			}
 		}
@@ -373,15 +367,7 @@ static void loop_handle_reads_writes(struct mosquitto_db *db, struct pollfd *pol
 			if(pollfds[db->contexts[i]->pollfd_index].revents & POLLIN){
 #endif
 				if(_mosquitto_packet_read(db, db->contexts[i])){
-					if(db->config->connection_messages == true){
-						if(db->contexts[i]->state != mosq_cs_disconnecting){
-							_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE, "Socket read error on client %s, disconnecting.", db->contexts[i]->id);
-						}else{
-							_mosquitto_log_printf(NULL, MOSQ_LOG_NOTICE, "Client %s disconnected.", db->contexts[i]->id);
-						}
-					}
-					/* Read error or other that means we should disconnect */
-					mqtt3_context_disconnect(db, db->contexts[i]);
+					do_disconnect(db, i);
 				}
 			}
 		}
